@@ -7,12 +7,23 @@ Downloads Windows (or Linux, if run under WSL) builds of:
   - osv-scanner    (dependency vulnerability scanning, npm + more)
   - CodeQL CLI     (dataflow/taint engine, python + javascript packs)  [--with-codeql]
 
+  [--with-offensive] the web attack toolkit, for AUTHORIZED targets only:
+  - ffuf           (content + parameter fuzzing)
+  - nuclei         (templated vulnerability checks)
+  - httpx          (fast HTTP probing)
+  - subfinder      (subdomain enumeration)
+  - mitmproxy      (scriptable intercepting proxy - the CLI answer to Burp)
+  - sqlmap         (SQL injection exploitation)
+  - jwt_tool       (JWT attack toolkit)
+  nmap is detected, not installed: Windows needs an MSI + admin rights + Npcap.
+
 Binaries land in tools/bin/ (gitignored). Re-running is idempotent (skips present tools).
 
 Usage:
-  python tools/install_tools.py              # gitleaks + osv-scanner
-  python tools/install_tools.py --with-codeql  # also the (large ~500MB) CodeQL bundle
-  python tools/install_tools.py --check      # just report what's installed
+  python tools/install_tools.py                  # gitleaks + osv-scanner
+  python tools/install_tools.py --with-codeql    # also the (large ~500MB) CodeQL bundle
+  python tools/install_tools.py --with-offensive # also the web attack toolkit
+  python tools/install_tools.py --check          # just report what's installed
 
 Note: uses the public GitHub releases API. If you hit rate limits, set GITHUB_TOKEN.
 """
@@ -25,12 +36,14 @@ import os
 import platform
 import shutil
 import stat
+import subprocess
 import sys
 import tarfile
 import urllib.request
 import zipfile
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent.parent
 BIN = Path(__file__).resolve().parent / "bin"
 BIN.mkdir(parents=True, exist_ok=True)
 
@@ -165,6 +178,111 @@ def install_codeql() -> None:
         print("  !! codeql binary not found after extraction - check tools/bin/codeql/")
 
 
+# --------------------------------------------------------------------------------------
+# Offensive web tooling (--with-offensive)
+#
+# These are for AUTHORIZED targets only - a host you booted yourself, or one a validated
+# scope.yml places inside a published bug-bounty scope. Several are noisy by default; read
+# the disclosure-ethics skill before pointing any of them at something you don't own.
+# --------------------------------------------------------------------------------------
+
+# name -> (github repo, binary basename inside the archive)
+GH_RELEASE_TOOLS = {
+    "ffuf":      ("ffuf/ffuf",                        "ffuf"),
+    "nuclei":    ("projectdiscovery/nuclei",          "nuclei"),
+    "httpx":     ("projectdiscovery/httpx",           "httpx"),
+    "subfinder": ("projectdiscovery/subfinder",       "subfinder"),
+}
+
+# pip-installable, into the project venv (never system-wide)
+PIP_TOOLS = {
+    "mitmproxy": "mitmproxy",   # scriptable intercepting proxy; use instead of Burp
+    "sqlmap":    "sqlmap",      # SQL injection exploitation
+}
+
+
+def _venv_python() -> str:
+    """The project venv interpreter if there is one, else whatever is running us."""
+    cand = ROOT / ".venv" / ("Scripts" if IS_WINDOWS else "bin") / ("python.exe" if IS_WINDOWS else "python")
+    return str(cand) if cand.exists() else sys.executable
+
+
+def install_gh_release(name: str, repo: str, binary: str) -> None:
+    """Install a single-binary tool from its GitHub releases page."""
+    target = BIN / f"{binary}{EXE}"
+    if target.exists():
+        print(f"{name}: already installed"); return
+    print(f"{name}: fetching latest release ...")
+    rel = _api(f"https://api.github.com/repos/{repo}/releases/latest")
+    plat = "windows" if IS_WINDOWS else "linux"
+    asset = _pick_asset(rel["assets"], [plat], ["amd64", "x86_64", "x64"])
+    if not asset:
+        print(f"  !! no matching {name} asset found"); return
+    tmp = BIN / asset["name"]
+    _download(asset["browser_download_url"], tmp)
+    print(f"  sha256={_sha256(tmp)[:16]}...")
+    if _extract(tmp, binary, target):
+        _mark_executable(target); print(f"  installed -> {target}")
+    else:
+        print(f"  !! {binary} not found inside {asset['name']}")
+    tmp.unlink(missing_ok=True)
+
+
+def install_pip_tool(name: str, spec: str) -> None:
+    """Install a python-based tool into the project venv."""
+    py = _venv_python()
+    probe = subprocess.run([py, "-m", spec.split("[")[0], "--version"],
+                           capture_output=True, text=True)
+    if probe.returncode == 0:
+        print(f"{name}: already installed"); return
+    print(f"{name}: pip install {spec} ...")
+    r = subprocess.run([py, "-m", "pip", "install", "-q", spec], capture_output=True, text=True)
+    if r.returncode == 0:
+        print(f"  installed -> {py} -m {name}")
+    else:
+        print(f"  !! pip install {spec} failed: {(r.stderr or '').strip().splitlines()[-1:]}")
+
+
+def install_jwt_tool() -> None:
+    """jwt_tool ships as a repo, not a release artifact."""
+    dest = BIN / "jwt_tool"
+    if (dest / "jwt_tool.py").exists():
+        print("jwt_tool: already installed"); return
+    git = shutil.which("git")
+    if not git:
+        print("jwt_tool: !! git not on PATH"); return
+    print("jwt_tool: cloning ...")
+    r = subprocess.run([git, "clone", "--depth", "1",
+                        "https://github.com/ticarpi/jwt_tool.git", str(dest)],
+                       capture_output=True, text=True)
+    if r.returncode == 0:
+        print(f"  installed -> {_venv_python()} {dest / 'jwt_tool.py'}")
+    else:
+        print(f"  !! clone failed: {(r.stderr or '').strip()}")
+
+
+def report_nmap() -> None:
+    """nmap is not auto-installed: Windows needs an MSI + admin, and it needs Npcap.
+
+    It is also rarely the right tool here - see TOOLS.md. Detect it, don't fetch it.
+    """
+    p = shutil.which("nmap")
+    if p:
+        print(f"nmap: OK (PATH) {p}"); return
+    print("nmap: not installed - install it yourself if a job needs it")
+    print("      windows: https://nmap.org/download#windows  (MSI, needs admin + Npcap)")
+    print("      linux:   sudo apt install nmap   ·   macos: brew install nmap")
+
+
+def install_offensive() -> None:
+    for name, (repo, binary) in GH_RELEASE_TOOLS.items():
+        install_gh_release(name, repo, binary)
+    for name, spec in PIP_TOOLS.items():
+        install_pip_tool(name, spec)
+    install_jwt_tool()
+    report_nmap()
+
+
 def check() -> None:
     print("Installed binary tools (tools/bin/):")
     for name in ("gitleaks", "osv-scanner"):
@@ -172,7 +290,22 @@ def check() -> None:
         print(f"  {name:14} {'OK ' + str(p) if p.exists() else 'MISSING'}")
     cq = BIN / "codeql" / f"codeql{EXE}"
     print(f"  {'codeql':14} {'OK ' + str(cq) if cq.exists() else 'MISSING (run --with-codeql)'}")
+
+    print("Offensive web tools (--with-offensive):")
+    for name, (_repo, binary) in GH_RELEASE_TOOLS.items():
+        p = BIN / f"{binary}{EXE}"
+        print(f"  {name:14} {'OK ' + str(p) if p.exists() else 'MISSING'}")
+    py = _venv_python()
+    for name in PIP_TOOLS:
+        ok = subprocess.run([py, "-m", name, "--version"],
+                            capture_output=True, text=True).returncode == 0
+        print(f"  {name:14} {'OK (venv)' if ok else 'MISSING'}")
+    jt = BIN / "jwt_tool" / "jwt_tool.py"
+    print(f"  {'jwt_tool':14} {'OK ' + str(jt) if jt.exists() else 'MISSING'}")
+    print(f"  {'nmap':14} {'OK (PATH)' if shutil.which('nmap') else 'MISSING on PATH (manual install)'}")
+
     # npm/gh are expected on PATH already
+    print("Expected on PATH:")
     for name in ("npm", "gh", "git"):
         print(f"  {name:14} {'OK (PATH)' if shutil.which(name) else 'MISSING on PATH'}")
 
@@ -180,6 +313,8 @@ def check() -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--with-codeql", action="store_true", help="also install the CodeQL bundle")
+    ap.add_argument("--with-offensive", action="store_true",
+                    help="also install ffuf, nuclei, httpx, subfinder, mitmproxy, sqlmap, jwt_tool")
     ap.add_argument("--check", action="store_true", help="report installed tools and exit")
     args = ap.parse_args()
 
@@ -191,6 +326,8 @@ def main() -> int:
         install_osv_scanner()
         if args.with_codeql:
             install_codeql()
+        if args.with_offensive:
+            install_offensive()
     except Exception as e:  # noqa: BLE001 - installer should fail loud but readable
         print(f"\n!! install error: {e}", file=sys.stderr)
         print("   (public GitHub API rate limit? set GITHUB_TOKEN and retry.)", file=sys.stderr)

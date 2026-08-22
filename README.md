@@ -1,4 +1,4 @@
-# Orca — AI/ML Security Research Pipeline
+# Orc — AI/ML Security Research Pipeline
 
 Find unknown vulnerabilities in open-source AI/ML software (Python and JS/TypeScript), prove them
 at runtime, and disclose them responsibly through a private GitHub Security Advisory or
@@ -16,6 +16,8 @@ python -m venv .venv
 
 python tools/bootstrap.py                              # runtime dirs + clean ledger
 python tools/install_tools.py --with-codeql            # gitleaks, osv-scanner, CodeQL
+python tools/install_tools.py --with-offensive         # ffuf, nuclei, httpx, subfinder,
+                                                       # mitmproxy, sqlmap, jwt_tool
 ```
 
 Needs Python 3.10+ and git. Node/npm only for JS/TS targets.
@@ -42,7 +44,9 @@ Full detail in **[TOOLS.md](TOOLS.md)**.
 | **Dynamic** | Playwright | headless Chromium — SPA render, DOM XSS |
 | | requests, PyJWT | HTTP probes, JWT forgery |
 | | hypothesis | fuzzing |
-| **Optional** | nmap, ffuf, nuclei, sqlmap, mitmproxy, jwt_tool, httpx, subfinder | not installed or invoked by any script — an agent fetches one on demand if a job needs it |
+| **Offensive** | ffuf, nuclei, httpx, subfinder | content fuzzing, templated checks, HTTP probing, subdomains |
+| | mitmproxy, sqlmap, jwt_tool | intercepting proxy, SQLi, JWT attacks |
+| | nmap | detected, not auto-installed — needs admin + Npcap on Windows |
 
 ## Agents
 

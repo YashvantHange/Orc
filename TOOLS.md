@@ -79,31 +79,32 @@ Playwright needs its browser too:
 
 **Plumbing:** PyYAML · GitPython · packaging · rich · flask + pytest (test fixtures)
 
-## Optional — not installed, not invoked
+## Offensive web tools — `--with-offensive`
 
-| Tool | What it would be for |
-|---|---|
-| **nmap** | host / port / service discovery |
-| **ffuf** | content and parameter fuzzing |
-| **nuclei** | templated vulnerability checks |
-| **sqlmap** | SQL injection exploitation |
-| **mitmproxy** | intercepting proxy, scriptable |
-| **jwt_tool** | JWT attack toolkit |
-| **httpx** (ProjectDiscovery) | fast HTTP probing across many hosts |
-| **subfinder** | subdomain enumeration |
+For **authorized targets only**: a host you booted yourself, or one a validated `scope.yml` places
+inside a published bug-bounty scope.
 
-None of these are bundled, installed by `install_tools.py`, or called by any script in this repo.
-An agent fetches one on demand when a job needs it — from the vendor's own release page, into the
-project venv or a directory under `work/`, never onto your PATH.
+```bash
+python tools/install_tools.py --with-offensive
+```
 
-Two caveats worth knowing:
+| Tool | Used for | Installed as |
+|---|---|---|
+| **ffuf** | content and parameter fuzzing | `tools/bin/ffuf` |
+| **nuclei** | templated vulnerability checks | `tools/bin/nuclei` |
+| **httpx** | fast HTTP probing across many hosts | `tools/bin/httpx` |
+| **subfinder** | subdomain enumeration | `tools/bin/subfinder` |
+| **mitmproxy** | scriptable intercepting proxy | project venv |
+| **sqlmap** | SQL injection exploitation | project venv |
+| **jwt_tool** | JWT attack toolkit | `tools/bin/jwt_tool/` |
+| **nmap** | host / port / service discovery | **detected, not installed** |
 
-- **nmap and subfinder are rarely useful here.** Targets are either source you cloned and booted on
-  localhost, or a single host inside a published bug-bounty scope where port and subdomain
-  enumeration is usually out of scope. Discovery in this pipeline is crawling, JS-bundle mining and
-  API-spec parsing — `web/recon.py`, `web/jsintel.py`, `web/apispec.py`.
-- **Burp Suite is not drivable from an agent.** The Community edition is a GUI proxy with no REST
-  API. Use mitmproxy instead.
+Notes:
+
+- **nmap is not auto-installed.** Windows needs an MSI, admin rights and Npcap. Install it from
+  <https://nmap.org/download> if a job needs it; `--check` will then find it on PATH.
+- **Burp Suite is not drivable from an agent** — Community has no REST API. mitmproxy replaces it.
+- Everything lands in `tools/bin/` or the project venv, never on your system PATH.
 
 ## What the agents use
 
