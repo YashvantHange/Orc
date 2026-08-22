@@ -1,0 +1,21 @@
+title = "sec-pipeline gitleaks config"
+
+# Use gitleaks' full default ruleset, then ignore vendored / venv / build paths so we only
+# flag secrets in the TARGET's own source (not its dependencies' test fixtures).
+[extend]
+useDefault = true
+
+[allowlist]
+description = "skip vendored deps, venvs, and build output"
+paths = [
+  '''.*/\.dynvenv/.*''',
+  '''.*/\.venv/.*''',
+  '''.*/venv/.*''',
+  '''.*/env/.*''',
+  '''.*/node_modules/.*''',
+  '''.*/site-packages/.*''',
+  '''.*/dist/.*''',
+  '''.*/build/.*''',
+  '''.*/vendor/.*''',
+  '''.*/third_party/.*''',
+]

@@ -1,0 +1,38 @@
+# AI/ML Security Research Pipeline — Python "muscle" dependencies.
+# Install into a venv:  python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
+
+# --- static analysis ---
+semgrep>=1.60.0            # multi-language SAST (python + js/ts)
+bandit[sarif]>=1.7.6       # python-specific SAST -> SARIF
+pip-audit>=2.7.0           # python dependency CVE audit
+
+# --- AST (multi-language, no native build on Windows) ---
+# Pin the compatible pair: tree-sitter-languages 1.10.2 needs the 0.21.x core API
+# (tree-sitter >=0.22 changed the API and breaks the prebuilt grammars).
+tree-sitter==0.21.3
+tree-sitter-languages==1.10.2   # prebuilt JS/TS/py grammars as wheels
+libcst>=1.1.0                   # optional richer python CST
+
+# --- dynamic testing / fuzzing ---
+hypothesis>=6.98.0        # property-based fuzzing (python parsers/loaders)
+requests>=2.31.0          # crafted HTTP probes
+PyJWT>=2.8.0              # JWT forgery probes (alg:none / hardcoded-secret)
+cryptography>=42.0.0      # asymmetric JWT probes (RS256/ES256) - dynamic/primitives/authn.py
+dnspython>=2.6.0          # DNS-rebinding / SSRF-guard probes - dynamic/primitives/authn.py
+websockets>=12.0          # WebSocket endpoint probes - dynamic/primitives/apis.py
+watchdog>=4.0.0          # filesystem-delta instrumentation
+
+# --- live-website recon ---
+beautifulsoup4>=4.12.0    # HTML parsing during crawl - web/recon.py
+playwright>=1.44.0        # headless chromium: SPA render, DOM-XSS execution, real cookie behaviour
+                          # NOTE: also run `python -m playwright install chromium`
+
+# --- test fixtures (tests/test_web_acceptance.py boots a deliberately-vulnerable app) ---
+flask>=3.0.0
+pytest>=8.0.0
+
+# --- misc plumbing ---
+PyYAML>=6.0.1
+GitPython>=3.1.42
+packaging>=23.2
+rich>=13.7.0             # readable CLI tables/output

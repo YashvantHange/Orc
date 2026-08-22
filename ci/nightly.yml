@@ -1,0 +1,52 @@
+# Optional nightly static+intel scan in GitHub Actions.
+# Requires this repo pushed to a GitHub remote. Dynamic confirmation stays MANUAL and local
+# (never point probes at third-party hosts from CI). Copy to .github/workflows/ to enable.
+name: nightly-static-hunt
+
+on:
+  schedule:
+    - cron: "0 3 * * *"   # 03:00 UTC nightly
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "owner/repo to scan"
+        required: true
+
+permissions:
+  contents: read
+  security-events: write   # to upload SARIF to code scanning
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pipeline deps
+        run: |
+          python -m pip install -r requirements.txt
+          python tools/install_tools.py
+      - name: Clone target
+        run: |
+          T="${{ github.event.inputs.target }}"
+          git clone --depth 1 "https://github.com/$T.git" work/$(basename "$T")/src
+      - name: Static + intel
+        run: |
+          T="${{ github.event.inputs.target }}"; S="work/$(basename "$T")/src"
+          python intel/ast_scan.py "$S" --summary
+          python static/run_all.py "$S"
+          python correlate/merge.py "$S"
+          python correlate/exploit_score.py "$S"
+      - name: Upload combined SARIF to Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: work/${{ github.event.inputs.target }}/findings.sarif
+        continue-on-error: true
+      - name: Publish findings artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: findings
+          path: work/**/findings.json
+# Then a human reviews findings.json and drives dynamic confirmation locally with /hunt.

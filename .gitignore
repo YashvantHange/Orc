@@ -1,0 +1,106 @@
+# =============================================================================
+#  What is PUBLIC in this repo: the pipeline itself.
+#    .claude/ (agents + skills)  hunt.py  intel/ static/ correlate/ dynamic/
+#    evidence/*.py  web/  reports/*.py  tools/  rules/  templates/  docs/  tests/
+#
+#  What NEVER leaves this machine: research output and target code.
+#    findings, disclosure reports, PoCs, evidence bundles, submission packets,
+#    cloned targets, scan databases, the investigation ledger, scratch work.
+#
+#  Rule of thumb: if it names a vulnerability in someone else's software, it is
+#  not tracked. Undisclosed findings are embargoed material.
+# =============================================================================
+
+# --- working data: clones, scan DBs, SARIF, evidence, PoCs -------------------
+work/
+# keep the deliberately-vulnerable self-test fixtures ...
+!work/_selftest/
+!work/_selftest/**
+# ... but never their generated artifacts
+work/_selftest/**/.dynvenv/
+work/_selftest/**/node_modules/
+work/_selftest/**/_dyn_logs/
+work/_selftest/**/__pycache__/
+work/_selftest/**/_TRAVERSAL_SENTINEL.txt
+
+# --- cloned / vendored TARGET source -----------------------------------------
+# Targets are cloned, not committed. Keep the candidate list, drop the code.
+targets/*
+!targets/candidates.yml
+
+# --- disclosure output: reports, PoCs, evidence, submission packets ----------
+# reports/ holds BOTH pipeline machinery and finding artifacts. Ignore the
+# directory, then re-admit the machinery by name.
+reports/*
+!reports/gate.py
+!reports/cvss.py
+!reports/dup_check.py
+!reports/live_checks.py
+!reports/verify_patch.py
+!reports/TEMPLATE.md
+!reports/README.md
+!reports/.gitkeep
+
+# per-finding evidence bundles (each may contain a full venv + target snapshot)
+evidence/*
+!evidence/collect.py
+!evidence/runlog.py
+!evidence/.gitkeep
+
+# packaged submissions and embargoed drafts
+submission/
+disclosure/
+
+# --- run state: ledger, audit verdicts, gate receipts, sessions --------------
+# The ledger is investigation history. Ship the empty schema, not the findings.
+state/*
+!state/ledger.example.json
+!state/.gitkeep
+state/audit/
+state/dup/
+state/gate/
+state/session/
+
+# --- scratch / local notes ---------------------------------------------------
+scratchpad/
+memory/
+*.harness.exe
+modbus_raw_oob_harness.exe
+
+# --- vendored tool binaries (tools/install_tools.py refetches them) ----------
+tools/bin/
+
+# --- python ------------------------------------------------------------------
+.venv/
+venv/
+.hypothesis/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# --- node --------------------------------------------------------------------
+node_modules/
+package-lock.json.bak
+
+# --- os / editor -------------------------------------------------------------
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/
+*.swp
+
+# --- secrets and authorization records: never commit ------------------------
+.env
+.env.*
+*.local.yml
+secrets.*
+# a real scope.yml names a live host you are authorized against - keep the
+# example, never the filled-in one
+scope.yml
+**/scope.yml
+!scope.example.yml

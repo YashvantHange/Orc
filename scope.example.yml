@@ -1,0 +1,86 @@
+# scope.yml — the authorization record for a live-website target.
+#
+# Copy this to work/<slug>/scope.yml, fill it from the program's published policy, then:
+#
+#   hunt scope --file work/<slug>/scope.yml --lint
+#   hunt scope --file work/<slug>/scope.yml --check https://app.example.com/api/items/1
+#
+# Every request the pipeline sends is checked against this file and written to
+# work/<slug>/web/transcript.jsonl. A request outside it is refused, not sent, and exits 3.
+#
+# This file is a safety net, not permission. It cannot verify that the program is real, that the
+# host belongs to it, or that the window is current — you can. `authorized_by` should be typed by
+# a human who read the policy.
+
+schema: 1
+
+program:
+  name: Example Bug Bounty
+  platform: hackerone            # hackerone | bugcrowd | intigriti | private | self
+  url: https://hackerone.com/example
+  policy_url: https://hackerone.com/example/policy
+  # sha256 of the policy TEXT you actually read, so the report can prove which version authorized this
+  policy_sha256: ""
+  researcher: your-handle
+  authorized_by: "policy read YYYY-MM-DD by <your name>"
+
+in_scope:
+  schemes: [https]
+  # Exact hostnames, or a leading dot for "this apex and any subdomain" (.api.example.com).
+  # Deliberately not regex — an over-matching pattern is how you test the wrong company.
+  hosts:
+    - app.example.com
+    - .api.example.com
+  ports: [443]
+  # Regexes matched against the URL path. Empty/absent = every path on an in-scope host.
+  paths:
+    - "^/api/"
+    - "^/app/"
+  # true ONLY for a target you launched yourself on 127.0.0.1. Refuses private/loopback/link-local
+  # resolution otherwise, which is what stops a DNS-rebind or an internal-hostname typo.
+  allow_private: false
+
+out_of_scope:
+  # Evaluated before in_scope — a deny here always wins.
+  hosts:
+    - status.example.com
+    - blog.example.com
+  paths:
+    - "^/api/v1/payments/"
+    - "^/admin/danger"
+  # Parameters never to fuzz or mutate, even on an in-scope endpoint.
+  params:
+    - "*token*"
+    - "*email*"
+
+methods:
+  allow: [GET, HEAD, OPTIONS, POST, PUT, PATCH]
+  deny: [DELETE, TRACE, CONNECT]
+
+limits:
+  rps: 2.0                       # sustained requests/second
+  burst: 5                       # token-bucket capacity
+  concurrency: 2
+  max_requests: 5000             # hard budget for this engagement; refuses past it
+  timeout_s: 15
+  max_redirects: 3               # each hop is re-checked against this scope
+
+safety:
+  # A state-changing verb (POST/PUT/PATCH/DELETE) at a path matching these is refused.
+  # Reading such a path is still allowed.
+  destructive_paths:
+    - '(?i)/(delete|purge|drop|deactivate|cancel|refund|terminate)'
+  respect_robots: false          # robots.txt is a discovery hint, not an authorization boundary
+  user_agent: "sec-research/1.0 (your-handle; hackerone.com/example)"
+  # Headers the program REQUIRES on every request (attribution headers such as HackerOne's
+  # X-HackerOne-Research). Applied to the whole session, so no primitive can forget one. The file
+  # refuses to load if a value is still placeholder text — unattributed traffic against a live
+  # program forfeits the bounty and looks like an attack.
+  required_headers:
+    X-HackerOne-Research: your-handle
+  marker: "probe-9c2f"           # benign proof marker; see the marker-conventions skill
+  dry_run: false                 # true = decide and transcribe, but send nothing
+
+test_window:
+  start: 2026-08-05T00:00:00Z
+  end: 2026-08-12T00:00:00Z

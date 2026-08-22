@@ -1,0 +1,217 @@
+# Custom Semgrep rules for AI/ML tools — three families grounded in real advisories
+# (HKUDS/LightRAG + n8n-io/n8n GHSAs). Run alongside the registry packs. These are
+# *lead generators*: a match is a hotspot for the agent to confirm, not a proven bug.
+#
+#   family 1: ml-sinks         (Python deserialization / RCE / SSRF / SSTI / LFI)
+#   family 2: web-auth         (LightRAG-class: auth defaults / JWT / CORS / secrets / disclosure)
+#   family 3: app-logic-jsts   (n8n-class: IDOR heuristics / expr-injection / XSS / secrets->LLM)
+
+rules:
+  # ============================ family 1: ML sinks (Python) ============================
+  - id: ai-pickle-untrusted-load
+    languages: [python]
+    severity: ERROR
+    message: >
+      Unsafe deserialization: pickle/joblib/torch.load/dill on possibly-untrusted data is
+      remote code execution. Verify the source is trusted or switch to a safe format.
+    metadata: {cwe: "CWE-502", family: ml-sinks, confirm: "POST attacker pickle -> observe exec"}
+    patterns:
+      - pattern-either:
+          - pattern: pickle.load(...)
+          - pattern: pickle.loads(...)
+          - pattern: joblib.load(...)
+          - pattern: torch.load(...)
+          - pattern: dill.load(...)
+          - pattern: dill.loads(...)
+
+  - id: ai-yaml-unsafe-load
+    languages: [python]
+    severity: ERROR
+    message: "yaml.load without SafeLoader deserializes arbitrary Python objects (RCE)."
+    metadata: {cwe: "CWE-502", family: ml-sinks}
+    patterns:
+      - pattern: yaml.load(...)
+      - pattern-not: yaml.load(..., Loader=yaml.SafeLoader)
+      - pattern-not: yaml.load(..., Loader=yaml.CSafeLoader)
+
+  - id: ai-tarfile-extractall
+    languages: [python]
+    severity: WARNING
+    message: "tarfile.extractall on untrusted archives allows path traversal (zip-slip / CVE-2007-4559)."
+    metadata: {cwe: "CWE-22", family: ml-sinks}
+    patterns:
+      - pattern: $T.extractall(...)
+
+  - id: ai-trust-remote-code
+    languages: [python]
+    severity: WARNING
+    message: "trust_remote_code=True executes model-repo Python at load time (supply-chain RCE)."
+    metadata: {cwe: "CWE-494", family: ml-sinks}
+    patterns:
+      - pattern: $F(..., trust_remote_code=True, ...)
+
+  - id: ai-ssti-render-string
+    languages: [python]
+    severity: ERROR
+    message: "Server-side template injection: user input into render_template_string / Template.render."
+    metadata: {cwe: "CWE-1336", family: ml-sinks, confirm: "payload {{7*7}} -> 49"}
+    patterns:
+      - pattern-either:
+          - pattern: flask.render_template_string(...)
+          - pattern: render_template_string(...)
+          - pattern: jinja2.Template(...).render(...)
+
+  - id: ai-ssrf-user-url
+    languages: [python]
+    severity: WARNING
+    message: >
+      Possible SSRF: HTTP client called with a request-derived URL. Validate against an
+      allow-list AND block IPv6-transition (NAT64/6to4), decimal/hex IPs, and redirects.
+    metadata: {cwe: "CWE-918", family: ml-sinks, confirm: "callback to local listener"}
+    patterns:
+      - pattern-either:
+          - pattern: requests.get($URL, ...)
+          - pattern: requests.post($URL, ...)
+          - pattern: requests.request(..., $URL, ...)
+          - pattern: urllib.request.urlopen($URL, ...)
+          - pattern: httpx.get($URL, ...)
+      - metavariable-pattern:
+          metavariable: $URL
+          patterns:
+            - pattern-not: "\"...\""
+
+  # ==================== family 2: Web/API & Auth (LightRAG-class) ====================
+  - id: ai-hardcoded-jwt-secret
+    languages: [python, javascript, typescript]
+    severity: ERROR
+    message: >
+      Hardcoded/default signing secret. Anyone reading the source can forge tokens
+      (see LightRAG GHSA hardcoded DEFAULT_TOKEN_SECRET / JWT signing secret).
+    metadata: {cwe: "CWE-798", family: web-auth, confirm: "forge token with this secret"}
+    patterns:
+      - pattern-either:
+          - pattern: $SECRET = "..."
+      - metavariable-regex:
+          metavariable: $SECRET
+          regex: (?i).*(secret|jwt|token|signing|private_key|api_key|password).*
+      - pattern-not: $SECRET = ""
+
+  - id: ai-jwt-verify-disabled
+    languages: [python]   # python-only syntax (verify=False); JS covered by ai-jwt-decode-noverify-js
+    severity: ERROR
+    message: "JWT signature verification explicitly disabled (verify=False / verify_signature:false) -> auth bypass."
+    metadata: {cwe: "CWE-347", family: web-auth, confirm: "send unsigned token -> accepted"}
+    patterns:
+      - pattern-either:
+          - pattern: jwt.decode(..., verify=False)
+          - pattern: 'jwt.decode(..., options={..., "verify_signature": False})'
+
+  - id: ai-jwt-decode-noverify-js
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: "jsonwebtoken.decode() never verifies the signature — use verify(). Auth bypass (n8n JWT class)."
+    metadata: {cwe: "CWE-347", family: web-auth, confirm: "send forged token -> accepted"}
+    patterns:
+      - pattern: jwt.decode(...)
+
+  - id: ai-jwt-alg-none
+    languages: [python]   # python kwarg syntax (algorithms=[...])
+    severity: ERROR
+    message: "JWT decode accepts alg:none -> attacker forges unsigned tokens (authentication bypass)."
+    metadata: {cwe: "CWE-347", family: web-auth, confirm: "send alg:none token -> accepted"}
+    patterns:
+      - pattern: jwt.decode(..., algorithms=$ALGS, ...)
+      - metavariable-pattern:
+          metavariable: $ALGS
+          patterns: [{pattern: '[..., "none", ...]'}]
+
+  - id: ai-cors-wildcard-credentials
+    languages: [python]   # FastAPI CORSMiddleware / flask-cors — python kwarg syntax
+    severity: ERROR
+    message: >
+      Wildcard/reflected CORS origin combined with credentials lets any site make
+      credentialed requests (LightRAG GHSA-6x6h-qqr7-855w class).
+    metadata: {cwe: "CWE-942", family: web-auth, confirm: "evil Origin -> reflected + creds:true"}
+    patterns:
+      - pattern-either:
+          - pattern: CORSMiddleware(..., allow_origins=["*"], ..., allow_credentials=True, ...)
+          - pattern: CORS($APP, ..., supports_credentials=True, ...)
+
+  - id: ai-nonconstant-secret-compare
+    languages: [python]
+    severity: WARNING
+    message: "Secret/password compared with == (timing side-channel). Use hmac.compare_digest."
+    metadata: {cwe: "CWE-208", family: web-auth}
+    patterns:
+      - pattern-either:
+          - pattern: $A == $B
+      - metavariable-regex:
+          metavariable: $A
+          regex: (?i).*(password|secret|token|hmac|signature|api_key).*
+
+  - id: ai-error-disclosure-py
+    languages: [python]
+    severity: WARNING
+    message: "Raw exception text returned to client leaks internals (LightRAG GHSA-hrmj-7rvj-4hg8 class)."
+    metadata: {cwe: "CWE-209", family: web-auth}
+    patterns:
+      - pattern-either:
+          - pattern: return ..., str($E), ...
+          - pattern: 'jsonify({..., "error": str($E), ...})'
+
+  - id: ai-error-disclosure-js
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: "Stack trace returned to client leaks internals (info disclosure)."
+    metadata: {cwe: "CWE-209", family: web-auth}
+    patterns:
+      - pattern-either:
+          - pattern: 'res.$M({..., stack: $E.stack, ...})'
+          - pattern: 'res.$M({..., stack: $E.stack})'
+
+  # =================== family 3: App-logic & JS/TS (n8n-class) ===================
+  - id: ai-idor-param-to-lookup
+    languages: [python, javascript, typescript]
+    severity: WARNING
+    message: >
+      Possible IDOR/broken-access-control: a request-supplied id indexes a resource with no
+      visible ownership/role check (n8n-class). Confirm with authz_diff.py across identities.
+    metadata: {cwe: "CWE-639", family: app-logic, confirm: "low-priv user reads other's object"}
+    patterns:
+      - pattern-either:
+          - pattern: $STORE[$REQ.params.$ID]
+          - pattern: $STORE[$REQ.args.get(...)]
+          - pattern: $STORE.get($REQ.args.get(...))
+
+  - id: ai-js-eval-injection
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: "eval / new Function / vm on request-derived input -> code injection (n8n expression-evaluator class)."
+    metadata: {cwe: "CWE-95", family: app-logic, confirm: "expr payload -> evaluated"}
+    patterns:
+      - pattern-either:
+          - pattern: eval(...)
+          - pattern: new Function(...)
+          - pattern: vm.runInContext(...)
+          - pattern: vm.runInNewContext(...)
+
+  - id: ai-js-command-injection
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: "child_process exec/execSync on request-derived input -> command injection."
+    metadata: {cwe: "CWE-78", family: app-logic}
+    patterns:
+      - pattern-either:
+          - pattern: $CP.exec(...)
+          - pattern: $CP.execSync(...)
+
+  - id: ai-dom-xss-sink
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: "Unsanitized value into innerHTML/dangerouslySetInnerHTML/v-html -> DOM XSS (n8n cachedResultUrl class)."
+    metadata: {cwe: "CWE-79", family: app-logic}
+    patterns:
+      - pattern-either:
+          - pattern: $EL.innerHTML = ...
+          - pattern: $EL.outerHTML = ...
+          - pattern: dangerouslySetInnerHTML=...

@@ -1,0 +1,45 @@
+{
+  "_schema": {
+    "description": "Investigation history \u2014 one record per finding, to avoid repeating work.",
+    "status_values": [
+      "NEW",
+      "TRIAGED",
+      "CONFIRMED",
+      "FALSE_POSITIVE",
+      "DUPLICATE",
+      "REPORTED",
+      "FIXED",
+      "CVE_ASSIGNED",
+      "BLOCKED",
+      "SCOPE_REFUSED"
+    ],
+    "record_fields": [
+      "finding_id",
+      "repo",
+      "commit",
+      "class",
+      "cwe",
+      "file",
+      "line",
+      "status",
+      "cvss",
+      "report_path",
+      "evidence_path",
+      "dup_verdict",
+      "notes",
+      "updated_at",
+      "target_kind",
+      "target_url",
+      "program",
+      "scope_digest",
+      "transcript_ids",
+      "test_window"
+    ],
+    "target_kinds": [
+      "src",
+      "url",
+      "grey"
+    ]
+  },
+  "findings": []
+}

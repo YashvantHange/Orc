@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+
+  "_comment_hooks": [
+    "Delivery-gate enforcement. Everything else in this pipeline can be skipped by an agent that",
+    "decides it already knows a report is fine; these cannot. The Stop hook keeps the turn from",
+    "ending while a report touched this session has no valid gate receipt, and the PreToolUse hook",
+    "refuses to transmit one. See tools/hooks/ and reports/gate.py.",
+    "The hooks never judge a report - they verify that the report-auditor and report-editor agents",
+    "did, against the exact bytes on disk, on top of a PoC recorded by `hunt poc-run`."
+  ],
+
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/tools/hooks/on_report_write.py\"",
+            "timeout": 30,
+            "statusMessage": "checking report gate state"
+          }
+        ]
+      }
+    ],
+
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/tools/hooks/pre_submit.py\"",
+            "timeout": 30,
+            "statusMessage": "checking delivery gate before submission"
+          }
+        ]
+      }
+    ],
+
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/tools/hooks/pre_delivery_gate.py\"",
+            "timeout": 60,
+            "statusMessage": "verifying the delivery gate"
+          }
+        ]
+      }
+    ]
+  },
+
+  "_comment_permissions": [
+    "The enforcement machinery is not agent-editable. A gate an agent can rewrite is not a gate -",
+    "the cheapest bypass of any check is to edit the check. Changing these files is still possible,",
+    "it just has to be a deliberate human act outside the session rather than something that happens",
+    "mid-task. Everything else in the repo stays freely editable."
+  ],
+
+  "permissions": {
+    "deny": [
+      "Edit(./.claude/settings.json)",
+      "Write(./.claude/settings.json)",
+      "Edit(./tools/hooks/**)",
+      "Write(./tools/hooks/**)",
+      "Edit(./reports/gate.py)",
+      "Write(./reports/gate.py)",
+      "Edit(./evidence/runlog.py)",
+      "Write(./evidence/runlog.py)"
+    ]
+  }
+}

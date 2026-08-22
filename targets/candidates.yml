@@ -1,0 +1,89 @@
+# Candidate AI/ML repos to *investigate* (not accusations of vulnerability).
+# Each is tagged with language so the scanner picks the right toolchain, and with the
+# attack surface that makes it interesting. repo_intel.py scores + ranks these.
+#
+# Bias the pick toward: active maintenance, an inviting SECURITY.md / huntr scope, a real
+# server/untrusted-input surface, and an "audit gap" (surface >> prior advisories).
+
+candidates:
+  # ---- Python: LLM / agent / RAG frameworks ----
+  - repo: HKUDS/LightRAG
+    lang: python
+    category: llm-rag
+    surface: [web-api, auth, file-upload, http-client, llm-nodes]
+    note: proven-fruitful, actively triages GHSAs (auth/JWT/CORS/SSRF history)
+  - repo: langflow-ai/langflow
+    lang: python
+    category: llm-agent
+    surface: [web-api, auth, code-exec, file-upload]
+  - repo: BerriAI/litellm
+    lang: python
+    category: llm-gateway
+    surface: [web-api, auth, http-client, config-load]
+  - repo: run-llama/llama_index
+    lang: python
+    category: llm-rag
+    surface: [file-load, deserialize, http-client, code-exec-tools]
+  - repo: deepset-ai/haystack
+    lang: python
+    category: llm-rag
+    surface: [file-load, deserialize, http-client]
+  - repo: Chainlit/chainlit
+    lang: python
+    category: llm-ui
+    surface: [web-api, auth, file-upload, websocket]
+
+  # ---- Python: MLOps / model serving ----
+  - repo: mlflow/mlflow
+    lang: python
+    category: mlops
+    surface: [web-api, auth, path-traversal, deserialize, artifact-load]
+    note: classic huntr target; heavily audited but surface keeps growing
+  - repo: bentoml/BentoML
+    lang: python
+    category: mlops
+    surface: [web-api, deserialize, model-load]
+  - repo: zenml-io/zenml
+    lang: python
+    category: mlops
+    surface: [web-api, auth, config-load]
+  - repo: aimhubio/aim
+    lang: python
+    category: mlops
+    surface: [web-api, path-traversal, deserialize]
+  - repo: ray-project/ray
+    lang: python
+    category: mlops
+    surface: [web-dashboard, rpc, deserialize, code-exec]
+  - repo: iterative/dvc
+    lang: python
+    category: mlops
+    surface: [file-load, http-client, remote-storage]
+
+  # ---- Python: AI web UIs ----
+  - repo: gradio-app/gradio
+    lang: python
+    category: ai-ui
+    surface: [web-api, file-upload, path-traversal, ssrf]
+    note: active huntr target; file/path + SSRF surface
+  - repo: streamlit/streamlit
+    lang: python
+    category: ai-ui
+    surface: [web-api, file-upload, component-eval]
+
+  # ---- JS/TS: agent / automation (highest-yield for authz/logic 0-days) ----
+  - repo: n8n-io/n8n
+    lang: typescript
+    category: automation-agent
+    surface: [web-api, auth, rbac, expression-eval, sandbox, ssrf, llm-nodes]
+    note: proven-fruitful, detailed GHSAs; broken-access-control + expr-injection history
+  - repo: FlowiseAI/Flowise
+    lang: typescript
+    category: llm-agent
+    surface: [web-api, auth, code-exec, file-upload]
+
+  # ---- mixed py + ts ----
+  - repo: open-webui/open-webui
+    lang: mixed
+    category: llm-ui
+    surface: [web-api, auth, rbac, file-upload, ssrf]
