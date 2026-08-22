@@ -7,6 +7,24 @@ at runtime, and disclose them responsibly through a private GitHub Security Advi
 Nine agents in `.claude/` do the reasoning. The Python in this repo is the muscle that runs
 scanners, boots targets, sends probes and records evidence.
 
+## Agents
+
+| Agent | Finds |
+|---|---|
+| `sec-orchestrator` | plans the hunt, routes leads, holds the gates |
+| `web-recon-hunter` | attack surface of a live site — crawl, JS/sourcemaps, API specs |
+| `authz-logic-hunter` | IDOR, BOLA, privilege escalation, mass assignment |
+| `injection-hunter` | RCE, SSRF, SSTI, SQLi, traversal, deserialization |
+| `authn-crypto-hunter` | auth bypass, JWT, secrets exposure, CORS, weak crypto |
+| `client-side-hunter` | DOM XSS, prototype pollution, CSRF, clickjacking |
+| `report-writer` | evidence → report with CWE, CVSS 3.1, dup-check |
+| `report-auditor` | cold fact-check — opens every cited line |
+| `report-editor` | structure, voice, rendering |
+
+The two report auditors read the finished report cold and each returns PASS or BLOCK. Nothing is
+delivered without both, plus a PoC that actually ran. Skills in `.claude/skills/` are the
+methodology each agent follows.
+
 ## Install
 
 ```bash
@@ -50,23 +68,6 @@ Full detail in **[TOOLS.md](TOOLS.md)**.
 | | mitmproxy, jwt_tool, testssl.sh, trufflehog | proxy, JWT, TLS, secrets |
 | **Manual** | Burp Suite, OWASP ZAP, nmap, Wireshark | detected on PATH, not auto-installed — see TOOLS.md |
 
-## Agents
-
-| Agent | Finds |
-|---|---|
-| `sec-orchestrator` | plans the hunt, routes leads, holds the gates |
-| `web-recon-hunter` | attack surface of a live site — crawl, JS/sourcemaps, API specs |
-| `authz-logic-hunter` | IDOR, BOLA, privilege escalation, mass assignment |
-| `injection-hunter` | RCE, SSRF, SSTI, SQLi, traversal, deserialization |
-| `authn-crypto-hunter` | auth bypass, JWT, secrets exposure, CORS, weak crypto |
-| `client-side-hunter` | DOM XSS, prototype pollution, CSRF, clickjacking |
-| `report-writer` | evidence → report with CWE, CVSS 3.1, dup-check |
-| `report-auditor` | cold fact-check — opens every cited line |
-| `report-editor` | structure, voice, rendering |
-
-The two report auditors read the finished report cold and each returns PASS or BLOCK. Nothing is
-delivered without both, plus a PoC that actually ran. Skills in `.claude/skills/` are the
-methodology each agent follows.
 
 ## Rules
 
