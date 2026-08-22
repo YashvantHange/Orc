@@ -96,15 +96,80 @@ Set `GITHUB_TOKEN` if you hit the releases-API rate limit.
 
 ## 4. What the agents themselves use
 
-The agents in `.claude/agents/` are Markdown, not scripts. Their tools are Claude Code's own —
-`Read`, `Grep`, `Glob`, `Bash`, `Write` (plus `WebFetch`/`WebSearch` for `report-writer`,
-`sec-orchestrator`, and `web-recon-hunter`). Through `Bash` they reach everything above, normally
-via the `hunt.py` front door:
+The agents in `.claude/agents/` are Markdown, not scripts. Their tools are Claude Code's own, and
+through `Bash` they reach everything above — normally via the `hunt.py` front door:
 
 ```bash
 python hunt.py --help        # every subcommand
 python hunt.py agents        # the roster: each agent, its model, tools and skills
 ```
+
+Tools below are each agent's `tools:` frontmatter, verbatim.
+
+| Agent | Claude Code tools | Model |
+|---|---|---|
+| `sec-orchestrator` | Read, Grep, Glob, Bash, Write, WebFetch, WebSearch | opus |
+| `web-recon-hunter` | Read, Grep, Glob, Bash, Write, WebFetch | opus |
+| `report-writer` | Read, Grep, Glob, Bash, Write, WebFetch, WebSearch | opus |
+| `authz-logic-hunter` | Read, Grep, Glob, Bash, Write | opus |
+| `injection-hunter` | Read, Grep, Glob, Bash, Write | opus |
+| `authn-crypto-hunter` | Read, Grep, Glob, Bash, Write | opus |
+| `client-side-hunter` | Read, Grep, Glob, Bash, Write | opus |
+| `report-auditor` | Read, Grep, Glob, Bash, Write | opus |
+| `report-editor` | Read, Grep, Glob, Bash, Write | sonnet |
+
+### 4a. The orchestrator specifically
+
+`sec-orchestrator` is the lead agent invoked by `/hunt`. It **never scans or exploits anything
+itself** — it plans, routes work to the specialists, verifies what they return, and holds the gates.
+What it drives:
+
+**Claude Code tools**
+
+| Tool | Used for |
+|---|---|
+| `Read` | source at the pinned commit, evidence bundles, gate receipts (`state/gate/<id>.json`) |
+| `Grep` | deriving the route table on `src` targets; locating guards and sinks |
+| `Glob` | mapping the target's layout before any scan |
+| `Bash` | every `hunt.py` subcommand, plus `git`, target boots and `curl` probes |
+| `Write` | `work/<slug>/profile.json`, scope files, coverage tables |
+| `WebFetch` / `WebSearch` | published advisories for the novelty exclusion map, `SECURITY.md`, program policy |
+| `Task`\* | spawning the five specialist hunters and the three report agents |
+| `TodoWrite`\* | mirroring the run board so progress shows in the UI as well as the text |
+
+> \* `Task` and `TodoWrite` are used by the orchestrator's own instructions (routing to specialists in
+> step 4; mirroring the board rows) but are **not** listed in its `tools:` frontmatter. If that field
+> is treated as a strict allowlist, routing would fail — worth verifying against your Claude Code
+> version and adding them explicitly if so.
+
+**`hunt.py` subcommands**
+
+| Command | Role in the hunt |
+|---|---|
+| `hunt scope --file <f> --lint` / `--check <url>` | hard authorization gate before any packet reaches a host it doesn't own |
+| `hunt dup <owner/repo> --query "<class>"` | prior-art check, run early — to exclude, not to emulate |
+| `hunt web <target>` | live-site recon and coverage; derives the request budget spent |
+| `hunt scan <src>` | chains scan → merge → exploit_score → ranked `findings.json` |
+| `hunt sweep <target>` | boots once, then probe + authz differential + fuzz on that one instance |
+| `hunt probe --url --primitive --endpoint` | a single primitive against one real endpoint |
+| `hunt authz-scaffold <src>` / `hunt authz` | `authz.json` skeleton, then the authorization differential |
+| `hunt cvss <vector>` | CVSS 3.1 scoring |
+| `hunt poc-run <target> <id> --cmd` | executes the PoC for real and records `runlog.json` |
+| `hunt evidence <target> <id>` | assembles the `evidence.json` bundle |
+| `hunt validate-report <id>` | the delivery gate — verifies the chain, issues the receipt |
+| `hunt report <id> [--layout …]` | report section scaffold (`github` default, `hackerone` on request) |
+| `hunt ledger add/update` · `hunt metrics` | investigation state and KPIs, so work is never repeated |
+| `hunt board …` | the live run board, reprinted at every step boundary |
+| `hunt agents [--skills]` | the roster |
+
+**Skills it loads** (the twelve it names): `guardrails` (first, and again before any report) ·
+`run-board` · `variant-analysis` (the novelty gate) · `vuln-playbooks` (the coverage matrix — ~55
+classes in seven groups) · `web-playbooks` for live targets · `dynamic-hunt` before any class is
+called `CLEAR` · `deep-trace` · `cwe-map` · `report-craft` + `report-standards` once a lead
+confirms · `disclosure-ethics` · `env`.
+
+`web-recon`, `poc-craft`, `taint-trace`, `authz-audit`, `marker-conventions` and
+`reasoning-checklist` belong to the specialist hunters and the report lane, not the orchestrator.
 
 The detection knowledge lives in `.claude/skills/` and does not depend on the Python layer — the
 scripts are optional muscle, and every subcommand has a manual equivalent.
