@@ -87,6 +87,3 @@ recreates those directories empty.
 ## More
 
 `docs/methodology.md` · `docs/disclosure.md` · `scope.example.yml` · `.claude/skills/`
-
-> **Known gap:** the fixture apps under `work/_selftest/` are not built, so 8 of 38 tests fail on a
-> missing flask fixture. The rest pass.
