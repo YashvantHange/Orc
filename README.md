@@ -44,9 +44,11 @@ Full detail in **[TOOLS.md](TOOLS.md)**.
 | **Dynamic** | Playwright | headless Chromium — SPA render, DOM XSS |
 | | requests, PyJWT | HTTP probes, JWT forgery |
 | | hypothesis | fuzzing |
-| **Offensive** | ffuf, nuclei, httpx, subfinder | content fuzzing, templated checks, HTTP probing, subdomains |
-| | mitmproxy, sqlmap, jwt_tool | intercepting proxy, SQLi, JWT attacks |
-| | nmap | detected, not auto-installed — needs admin + Npcap on Windows |
+| **Offensive** | ffuf, gobuster, dirsearch, arjun | content, path and parameter fuzzing |
+| | nuclei, dalfox, sqlmap, commix, nikto | templated checks, XSS, SQLi, command injection |
+| | httpx, katana, subfinder, amass, dnsx, naabu | probing, crawling, subdomains, DNS, ports |
+| | mitmproxy, jwt_tool, testssl.sh, trufflehog | proxy, JWT, TLS, secrets |
+| **Manual** | Burp Suite, OWASP ZAP, nmap, Wireshark | detected on PATH, not auto-installed — see TOOLS.md |
 
 ## Agents
 

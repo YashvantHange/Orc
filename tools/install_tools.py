@@ -188,16 +188,60 @@ def install_codeql() -> None:
 
 # name -> (github repo, binary basename inside the archive)
 GH_RELEASE_TOOLS = {
-    "ffuf":      ("ffuf/ffuf",                        "ffuf"),
-    "nuclei":    ("projectdiscovery/nuclei",          "nuclei"),
-    "httpx":     ("projectdiscovery/httpx",           "httpx"),
-    "subfinder": ("projectdiscovery/subfinder",       "subfinder"),
+    "ffuf":       ("ffuf/ffuf",                    "ffuf"),        # content/param fuzzing
+    "nuclei":     ("projectdiscovery/nuclei",      "nuclei"),      # templated checks
+    "httpx":      ("projectdiscovery/httpx",       "httpx"),       # fast HTTP probing
+    "subfinder":  ("projectdiscovery/subfinder",   "subfinder"),   # subdomains
+    "katana":     ("projectdiscovery/katana",      "katana"),      # crawler
+    "dnsx":       ("projectdiscovery/dnsx",        "dnsx"),        # DNS toolkit (rebinding checks)
+    "naabu":      ("projectdiscovery/naabu",       "naabu"),       # port scan - the installable nmap alternative
+    "gobuster":   ("OJ/gobuster",                  "gobuster"),    # dir/dns/vhost brute force
+    "amass":      ("owasp-amass/amass",            "amass"),       # attack-surface mapping
+    "dalfox":     ("hahwul/dalfox",                "dalfox"),      # XSS scanner
+    "trufflehog": ("trufflesecurity/trufflehog",   "trufflehog"),  # secrets, verified
 }
 
 # pip-installable, into the project venv (never system-wide)
 PIP_TOOLS = {
-    "mitmproxy": "mitmproxy",   # scriptable intercepting proxy; use instead of Burp
+    "mitmproxy": "mitmproxy",   # scriptable intercepting proxy - the CLI answer to Burp
     "sqlmap":    "sqlmap",      # SQL injection exploitation
+    "arjun":     "arjun",       # HTTP parameter discovery
+    "dirsearch": "dirsearch",   # path brute force
+}
+
+# repo -> entrypoint. Tools that ship as a source tree, not a release artifact.
+GIT_TOOLS = {
+    "jwt_tool":   ("https://github.com/ticarpi/jwt_tool.git",    "jwt_tool.py"),
+    "commix":     ("https://github.com/commixproject/commix.git", "commix.py"),
+    "nikto":      ("https://github.com/sullo/nikto.git",          "program/nikto.pl"),
+    "testssl.sh": ("https://github.com/drwetter/testssl.sh.git",  "testssl.sh"),
+}
+
+# GUI or installer-based: detected, never fetched. Auto-installing these needs an MSI,
+# admin rights, a JRE or a licence, none of which belong in an unattended script.
+MANUAL_TOOLS = {
+    "nmap": (
+        ["nmap"],
+        "https://nmap.org/download",
+        "windows needs the MSI + admin + Npcap; linux: apt install nmap",
+    ),
+    "burpsuite": (
+        ["burpsuite", "BurpSuiteCommunity", "BurpSuitePro"],
+        "https://portswigger.net/burp/releases",
+        "GUI proxy. Community has NO REST API and cannot be driven from an agent loop - "
+        "only Professional/Enterprise expose one. Use mitmproxy or ZAP for automation.",
+    ),
+    "zap": (
+        ["zap", "zap.sh", "zap.bat", "owasp-zap"],
+        "https://www.zaproxy.org/download/",
+        "needs a JRE. Unlike Burp Community it has a REST API and a headless daemon "
+        "(-daemon -config api.key=...), so it IS drivable from an agent.",
+    ),
+    "wireshark": (
+        ["tshark", "wireshark"],
+        "https://www.wireshark.org/download.html",
+        "tshark is the CLI half - use it, not the GUI, for capture in a hunt.",
+    ),
 }
 
 
@@ -243,35 +287,31 @@ def install_pip_tool(name: str, spec: str) -> None:
         print(f"  !! pip install {spec} failed: {(r.stderr or '').strip().splitlines()[-1:]}")
 
 
-def install_jwt_tool() -> None:
-    """jwt_tool ships as a repo, not a release artifact."""
-    dest = BIN / "jwt_tool"
-    if (dest / "jwt_tool.py").exists():
-        print("jwt_tool: already installed"); return
+def install_git_tool(name: str, url: str, entry: str) -> None:
+    """Some tools ship as a source tree, not a release artifact."""
+    dest = BIN / name
+    if (dest / entry).exists():
+        print(f"{name}: already installed"); return
     git = shutil.which("git")
     if not git:
-        print("jwt_tool: !! git not on PATH"); return
-    print("jwt_tool: cloning ...")
-    r = subprocess.run([git, "clone", "--depth", "1",
-                        "https://github.com/ticarpi/jwt_tool.git", str(dest)],
+        print(f"{name}: !! git not on PATH"); return
+    print(f"{name}: cloning ...")
+    r = subprocess.run([git, "clone", "--depth", "1", url, str(dest)],
                        capture_output=True, text=True)
     if r.returncode == 0:
-        print(f"  installed -> {_venv_python()} {dest / 'jwt_tool.py'}")
+        print(f"  installed -> {dest / entry}")
     else:
-        print(f"  !! clone failed: {(r.stderr or '').strip()}")
+        print(f"  !! clone failed: {(r.stderr or '').strip().splitlines()[-1:]}")
 
 
-def report_nmap() -> None:
-    """nmap is not auto-installed: Windows needs an MSI + admin, and it needs Npcap.
-
-    It is also rarely the right tool here - see TOOLS.md. Detect it, don't fetch it.
-    """
-    p = shutil.which("nmap")
-    if p:
-        print(f"nmap: OK (PATH) {p}"); return
-    print("nmap: not installed - install it yourself if a job needs it")
-    print("      windows: https://nmap.org/download#windows  (MSI, needs admin + Npcap)")
-    print("      linux:   sudo apt install nmap   ·   macos: brew install nmap")
+def report_manual(name: str, binaries: list[str], url: str, note: str) -> None:
+    """Detect an installer- or GUI-based tool. Never fetch it."""
+    found = next((shutil.which(b) for b in binaries if shutil.which(b)), None)
+    if found:
+        print(f"{name}: OK (PATH) {found}")
+    else:
+        print(f"{name}: not installed - {url}")
+    print(f"      {note}")
 
 
 def install_offensive() -> None:
@@ -279,8 +319,11 @@ def install_offensive() -> None:
         install_gh_release(name, repo, binary)
     for name, spec in PIP_TOOLS.items():
         install_pip_tool(name, spec)
-    install_jwt_tool()
-    report_nmap()
+    for name, (url, entry) in GIT_TOOLS.items():
+        install_git_tool(name, url, entry)
+    print("\nInstaller/GUI tools - detected only, install these yourself:")
+    for name, (binaries, url, note) in MANUAL_TOOLS.items():
+        report_manual(name, binaries, url, note)
 
 
 def check() -> None:
@@ -300,9 +343,14 @@ def check() -> None:
         ok = subprocess.run([py, "-m", name, "--version"],
                             capture_output=True, text=True).returncode == 0
         print(f"  {name:14} {'OK (venv)' if ok else 'MISSING'}")
-    jt = BIN / "jwt_tool" / "jwt_tool.py"
-    print(f"  {'jwt_tool':14} {'OK ' + str(jt) if jt.exists() else 'MISSING'}")
-    print(f"  {'nmap':14} {'OK (PATH)' if shutil.which('nmap') else 'MISSING on PATH (manual install)'}")
+    for name, (_url, entry) in GIT_TOOLS.items():
+        p = BIN / name / entry
+        print(f"  {name:14} {'OK ' + str(p) if p.exists() else 'MISSING'}")
+
+    print("Installer/GUI tools (install yourself):")
+    for name, (binaries, url, _note) in MANUAL_TOOLS.items():
+        found = next((shutil.which(b) for b in binaries if shutil.which(b)), None)
+        print(f"  {name:14} {'OK (PATH) ' + found if found else 'MISSING - ' + url}")
 
     # npm/gh are expected on PATH already
     print("Expected on PATH:")

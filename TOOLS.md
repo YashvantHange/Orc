@@ -88,23 +88,53 @@ inside a published bug-bounty scope.
 python tools/install_tools.py --with-offensive
 ```
 
-| Tool | Used for | Installed as |
+**Binaries** → `tools/bin/`, from each vendor's GitHub releases
+
+| Tool | Used for |
+|---|---|
+| ffuf | content and parameter fuzzing |
+| nuclei | templated vulnerability checks |
+| httpx | fast HTTP probing across many hosts |
+| katana | crawling |
+| subfinder | subdomain enumeration |
+| dnsx | DNS toolkit — rebinding checks |
+| naabu | port scanning (the installable nmap alternative) |
+| gobuster | directory / DNS / vhost brute force |
+| amass | attack-surface mapping |
+| dalfox | XSS scanning |
+| trufflehog | secrets, with verification |
+
+**Python** → the project venv
+
+| Tool | Used for |
+|---|---|
+| mitmproxy | scriptable intercepting proxy |
+| sqlmap | SQL injection exploitation |
+| arjun | HTTP parameter discovery |
+| dirsearch | path brute force |
+
+**Source trees** → cloned into `tools/bin/`
+
+| Tool | Used for |
+|---|---|
+| jwt_tool | JWT attack toolkit |
+| commix | command injection |
+| nikto | web server scanning (needs perl) |
+| testssl.sh | TLS configuration testing |
+
+**Installer / GUI — detected, never fetched**
+
+These need an MSI, admin rights, a JRE or a licence, none of which belong in an unattended script.
+`--check` reports whether each is on PATH.
+
+| Tool | Get it from | Note |
 |---|---|---|
-| **ffuf** | content and parameter fuzzing | `tools/bin/ffuf` |
-| **nuclei** | templated vulnerability checks | `tools/bin/nuclei` |
-| **httpx** | fast HTTP probing across many hosts | `tools/bin/httpx` |
-| **subfinder** | subdomain enumeration | `tools/bin/subfinder` |
-| **mitmproxy** | scriptable intercepting proxy | project venv |
-| **sqlmap** | SQL injection exploitation | project venv |
-| **jwt_tool** | JWT attack toolkit | `tools/bin/jwt_tool/` |
-| **nmap** | host / port / service discovery | **detected, not installed** |
+| **Burp Suite** | <https://portswigger.net/burp/releases> | GUI proxy. **Community has no REST API** and cannot be driven from an agent loop — only Professional/Enterprise expose one. |
+| **OWASP ZAP** | <https://www.zaproxy.org/download/> | Needs a JRE. Unlike Burp Community it **has a REST API and a headless daemon** (`-daemon -config api.key=…`), so an agent can drive it. |
+| **nmap** | <https://nmap.org/download> | Windows needs the MSI, admin and Npcap. `naabu` above covers most port-scan needs without that. |
+| **Wireshark** | <https://www.wireshark.org/download.html> | Use `tshark`, the CLI half, not the GUI. |
 
-Notes:
-
-- **nmap is not auto-installed.** Windows needs an MSI, admin rights and Npcap. Install it from
-  <https://nmap.org/download> if a job needs it; `--check` will then find it on PATH.
-- **Burp Suite is not drivable from an agent** — Community has no REST API. mitmproxy replaces it.
-- Everything lands in `tools/bin/` or the project venv, never on your system PATH.
+Everything lands in `tools/bin/` or the project venv — never on your system PATH.
 
 ## What the agents use
 
