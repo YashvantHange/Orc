@@ -12,7 +12,11 @@
 # =============================================================================
 
 # --- working data: clones, scan DBs, SARIF, evidence, PoCs -------------------
-work/
+# `work/*` rather than `work/`: git cannot re-include anything inside an EXCLUDED DIRECTORY, so the
+# negations below were inert - `git check-ignore` reported work/_selftest/... as ignored by `work/`
+# and the self-test fixtures could never be committed, which is why none of them are in the repo.
+# Excluding the CONTENTS instead lets the negations do what they always said they did.
+work/*
 # keep the deliberately-vulnerable self-test fixtures ...
 !work/_selftest/
 !work/_selftest/**
@@ -33,6 +37,7 @@ targets/*
 # directory, then re-admit the machinery by name.
 reports/*
 !reports/gate.py
+!reports/impact_gate.py
 !reports/cvss.py
 !reports/dup_check.py
 !reports/live_checks.py
@@ -104,3 +109,19 @@ secrets.*
 scope.yml
 **/scope.yml
 !scope.example.yml
+# ... with one exception: the loopback self-test fixture. Its scope authorizes 127.0.0.1 and a
+# Flask app in this repo, so it names no third party and carries no one's authorization but our
+# own - and without it a fresh clone cannot run tests/test_web_acceptance.py at all, which is how
+# that suite came to have no fixture in the first place.
+!work/_selftest/**/scope.yml
+
+# --- generated/scratch artifacts, never source ------------------------------
+# Chainlit scaffolds .chainlit/ (config + ~30 translation files) on first run,
+# and .dynvenv_chainlit/ is its 175 MB virtualenv.
+.chainlit/
+.dynvenv_chainlit/
+# Cygwin/MSYS crash dumps from the grep the hunters shell out to.
+*.stackdump
+# Leftover source extracts from past targets.
+src_extract.txt
+src_lines.txt

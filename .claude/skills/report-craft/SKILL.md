@@ -16,6 +16,14 @@ bug is still up, the payload still fires, and the hunter can still answer a ques
 decay within the hour. The orchestrator suspends routing for the duration (`sec-orchestrator` § "A
 confirmation interrupts the hunt") and shows this lane as its own numbered rows on the board.
 
+**The main session owns this lane.** Do not delegate the writing, the quote verification, the gated
+PoC runs, or the gate reading to a subagent. Long report-lane agents have been killed mid-run by
+provider rate limits and API errors five times across targets; a dead writer leaves a half-built
+folder that every other rule then treats as a real delivery. Hunters stay delegated — a dead hunter
+costs only its own coverage, and that coverage gets labelled `BLOCKED`. The two cold audits are the
+one exception, and must stay delegated: their value is that they read the report without having seen
+it written. See `RULES.md` Gap 4.
+
 **Nothing is audited before it is written.** The lane is strictly serial: score → write the whole
 report → self-edit → clean-room run → *then* the auditors. An auditor tasked on a partial draft files
 defects against sections that were about to be written anyway, and its verdict binds to bytes that are
@@ -38,6 +46,19 @@ Before anything else, run the Security-impact gate in `report-standards`: a name
 boundary actually crossed, and a C/I/A property that breaks. A performance regression, a self-DoS, a
 crash only the operator can reach, or a hardening suggestion is `OUT_OF_SCOPE` — one line in the
 ledger and no report. Cheaper here than at the auditor, and far cheaper than at the maintainer.
+
+Then run question 5, the **impact bar** — is this worth *filing*, which is a different question from
+whether it is a vulnerability. Record the answers; nothing downstream will open without them:
+
+```
+hunt impact-gate <id> --program <google-oss-vrp|github|hackerone|huntr> --vector '<CVSS:3.1/...>'   --attacker '...' --boundary '...' --impact '...' --marginal-gain '...' --gadget '...'   --precondition '...' --precondition '...'
+```
+
+It refuses below CVSS 4.0, refuses a primitive with no demonstrated gadget chain, and refuses three or
+more independent preconditions — the three shapes that got real, fully-proven reports closed as not
+severe enough to track. `hunt report` and `hunt validate-report` both require its PASS, so run it
+before you write, not after. A BLOCK is not a setback: say so to the user, name the blocker, and offer
+the upstream GitHub issue as the ceiling.
 
 ## 1. Score CVSS
 `hunt cvss <vector>` (or `reports/cvss.py`). You pick the metrics from what you **proved** — anchors
@@ -130,6 +151,70 @@ the report's exact requests against the authorized host inside the test window a
 responses still match the cited `T#####` ids — a live target can be patched between your test and the
 maintainer's read.
 
+## 4b. Pre-flight — run the gate BEFORE you spend an audit (hard rule)
+
+An audit round is the most expensive thing in this pipeline: two cold reads of the whole report, and
+the factual one re-executes the PoC. The gate is nearly free. **Run `hunt validate-report <id>` first
+and fix every mechanical failure it names, before either auditor is dispatched.** A mechanical failure
+does not care what the auditors conclude — it will block the receipt anyway, and any edit you make to
+clear it voids their verdicts and forces the whole round again.
+
+The failures that are pure waste when found *after* an audit, all of them seen in real runs:
+
+- `CVSS` — the report vector and the ledger vector disagree. Fix with `hunt ledger update --id <id>
+  --set cvss="<vector>"`. Keep them equal whenever you change severity, in the report, the ledger and
+  `submission-fields/`, in the same edit.
+- `PoC executed` — a run recorded against a **dirty target tree**. Check `git status --porcelain` in
+  the target and clear it *before* recording anything. Probe files, stray notes and scratch tests
+  belong outside the clone.
+- Placeholder and prose hints printed under the gate result. They are a regex guessing, not a verdict,
+  but `<angle-bracket>` phrasing in your own sentences reads as an unfilled template — reword it.
+- A stale `dup` verdict, or a missing `submission-fields/` file.
+
+Then freeze and audit **once**.
+
+**Never re-record a PoC run to make a gate complaint disappear.** The runlog is append-only and
+tamper-evident: hand-editing it to drop a bad run changes the stored stdout, every hash stops
+matching, and the gate reports `the runlog was edited after the run` — a worse state than the one you
+started in. Re-record only when the PoC or the target actually changed. Two clean runs by two agents
+in two directories is the target; **seven runs of one PoC is a real number from a real session** and
+every one past the second bought nothing.
+
+**If the runlog is poisoned, regenerate it — never hand-edit it.** A run recorded against a dirty
+target tree is stamped `tree_dirty` permanently, and the gate then refuses the receipt because the
+pinned commit does not describe what ran. This is unrecoverable by editing: the runlog is
+tamper-evident, so removing the bad entry changes the stored stdout, every hash stops matching, and you
+trade one honest complaint for `the runlog was edited after the run`, which is worse. That has been
+tried on this pipeline; it failed exactly that way and had to be restored from a copy.
+
+Prevention is the real fix, and it is cheap: `git status --porcelain` in the target must be empty
+*before* any `poc-run`, and every probe, scratch test and note lives outside the clone. The dirt that
+caused this was an auditing agent's own test file, not the product's.
+
+When it has already happened, the only sanctioned recovery is to regenerate rather than edit, under
+all four of these conditions — if you cannot meet them, stop and tell the user rather than proceeding:
+
+1. The contamination was **our own tooling** (a probe, a scratch file, a stray artifact), not a change
+   to the product under test. If the target itself was modified, the runs are genuinely invalid and the
+   finding needs re-proving, not re-recording.
+2. The original runlog is **preserved verbatim** outside the evidence directory before anything is
+   removed, so the full history stays inspectable.
+3. The tree is clean, and the PoC is re-recorded from scratch by the normal path — two runs, two
+   agents, two directories. You are producing new honest records, not rewriting old ones.
+4. The regeneration is **disclosed** in the ledger notes with the reason and the path to the archive.
+
+Regenerating a runlog to hide a failed or non-reproducing run is falsification, not recovery. The test
+is whether the new records describe something a stranger can reproduce from the pinned commit — if they
+do, the evidence is stronger than before; if they do not, you are covering something up.
+
+**Keep the PoC cheap to execute.** It is run at least twice, by different agents, in different
+directories. A PoC that deletes and reinstalls a large dependency tree on every invocation turns each
+verification into minutes of network I/O. Cache the expensive setup and reuse it when it is already
+present; keep the destructive reset behind a flag. **Run artifacts never ship in the packet** — an
+installed `node_modules`, a venv, a build output. They bloat the attachment by orders of magnitude,
+and vendored third-party files inside them carry strings that trip the destination's content
+classifier. Ship the scripts that regenerate them.
+
 ## 5. Freeze the bytes, then send it to both auditors
 
 **The report is finished before this step starts** — drafted, self-edited, clean-room verified, and
@@ -187,7 +272,39 @@ regex guessing at prose. Look where they point; do not obey them.
 ## 7. Submit + record
 `github` layout → a private GHSA via the repo's Security tab / the channel `SECURITY.md` names; on
 huntr, submit the same body on-platform (never email). `hackerone` → the program's submission form.
-See `docs/disclosure.md`. Then `hunt ledger update --id <id> --set status=REPORTED
-report_path=reports/<file>`.
+See `docs/disclosure.md`.
+
+**Claude does not submit.** The finished deliverable is a folder the user files from — report `.md`,
+`HOW-TO-FILE.md`, a runnable `poc/`, and `submission-fields/` holding one paste-ready value per form
+field. Hand over the folder path and the field mapping so filing is mechanical.
+
+**Record the submission the moment it happens** — nothing in the pipeline writes this back on its own,
+and a stale status is how a finding gets re-worked or re-filed months later:
+
+```
+hunt ledger update --id <id> --set status=SUBMITTED submitted_at=<YYYY-MM-DD>     submitted_to="<program>" submitted_sha256=<the exact bytes filed>     notes="<verification state at submission, in full>"
+```
+
+Record the **submitted sha256**, not just the path — packets get edited afterwards, and without the
+hash nobody can tell later what was actually filed. If a report id or tracking URL comes back, add it.
+
+### When something is already filed and then found wrong
+
+This happens: a report goes out before an audit finishes, or a later pass finds a defect. Handle it
+openly rather than quietly.
+
+- **Do not resubmit.** A second report for the same defect wastes triage time and reads as noise.
+  Add a correction as a comment on the existing report.
+- **Correct it proactively, even when it lowers your severity.** A researcher who writes "my original
+  impact claim overstated this; here is what I actually demonstrated" is trusted on everything else
+  they file. One discovered by the triager instead is not.
+- **Say what changed and what still stands.** Name the claim being withdrawn, the evidence that
+  replaced it, and which parts of the finding are unaffected.
+- **Record it in the ledger** against the same id, with the corrected state.
+- If a fix landed publicly between your submission and triage, say so — it is better coming from you.
+
+The same applies to a report filed without a gate receipt: note in the ledger exactly which checks did
+and did not run on the submitted bytes, so a later session can tell what was verified from what was
+merely intended.
 
 Tone: precise, factual, collaborative — you're helping the maintainer fix a real problem.

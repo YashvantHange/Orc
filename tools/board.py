@@ -38,6 +38,11 @@ STATUSES = {
     "done":    ("[x]", "done",    "green"),
     "blocked": ("[!]", "BLOCKED", "yellow"),
     "na":      ("[-]", "N/A",     "dim"),
+    # A member that handed its lead to another member is neither done nor blocked. Without this it
+    # had to be marked one of the two, and both lie: `done` claims a verdict nobody produced,
+    # `blocked` claims the surface defeated us. The receiving member's verdict is the real one, so a
+    # handoff is deliberately NOT counted in the tally - counting both would double-count the row.
+    "handoff": ("[~]", "HANDOFF", "cyan"),
 }
 
 _C = {"dim": "\033[2m", "cyan": "\033[36m", "green": "\033[32m", "yellow": "\033[33m",
@@ -139,6 +144,34 @@ def cmd_init(a) -> int:
     return _render(doc)
 
 
+def cmd_swarm(a) -> int:
+    """Append a whole sized swarm in ONE call, so the roster still does not grow as you go.
+
+    `init` refuses a partial roster because a board that grows hides how much is left. A swarm does
+    not violate that: its width and membership are decided once, after recon and aiming, BEFORE any
+    member is tasked - so the whole membership lands in a single append and the user sees the full
+    shape immediately. Numbers stay stable, as everywhere else on this board.
+    """
+    doc = load(a.target)
+    if not a.member:
+        raise SystemExit("board swarm needs the WHOLE sized membership up front "
+                         "(--member agent:shard, repeatable) - see `hunt swarm plan`")
+    added = _add_rows(doc, a.member)
+    sid = (getattr(a, "id", "") or "").strip()
+    role = (getattr(a, "role", "") or "").strip()
+    entry = {"id": sid or role or "swarm", "role": role, "size": len(added),
+             "launched": time.time(), "passes": int(getattr(a, "passes", 0) or 0),
+             "plan_sha256": getattr(a, "plan", "") or ""}
+    for row in added:
+        row["swarm"] = entry["id"]
+    doc.setdefault("swarms", [])
+    doc["swarms"] = [e for e in doc["swarms"] if e.get("id") != entry["id"]] + [entry]
+    doc["swarm"] = entry            # legacy single-swarm key, kept so old readers still render
+    save(a.target, doc)
+    print(f"swarm {entry['id']} of {len(added)} -> rows {added[0]['n']}-{added[-1]['n']}")
+    return _render(doc)
+
+
 def cmd_add(a) -> int:
     doc = load(a.target)
     added = _add_rows(doc, a.row)
@@ -153,7 +186,7 @@ def cmd_status(a, status: str) -> int:
     row["status"] = status
     if status == "running" and not row["started"]:
         row["started"] = time.time()
-    if status in ("done", "blocked", "na"):
+    if status in ("done", "blocked", "na", "handoff"):
         row["ended"] = time.time()
     if getattr(a, "result", None):
         row["result"] = a.result
@@ -251,8 +284,19 @@ def _header(doc: dict) -> str:
             f"step {doc['step'][0]}/{doc['step'][1]}",
             f"covered {t['covered'][0]}/{t['covered'][1]}",
             f"{t['HIT']} HIT", f"{t['CLEAR']} CLEAR", f"{t['BLOCKED']} BLOCKED"]
+    swarms = doc.get("swarms") or ([doc["swarm"]] if doc.get("swarm") else [])
+    if len(swarms) > 1:
+        bits.append(f"fleet {len(swarms)}x{sum(int(e.get('size') or 0) for e in swarms)}")
+    elif swarms and swarms[0].get("size"):
+        sw = swarms[0]
+        bits.append(f"swarm {sw['size']}" + (f" · pass 1/{sw['passes']}"
+                                             if sw.get("passes", 0) > 1 else ""))
     if t["CONFIRMED"]:
         bits.append(f"CONFIRMED {', '.join(t['CONFIRMED'])}")
+    if doc.get("limiter_degraded"):
+        # Loud on purpose: a degraded limiter is serialising every request, and a swarm sized
+        # against a ceiling it can no longer hold is not the swarm that is running.
+        bits.append("LIMITER_DEGRADED")
     return _sep("HUNT BOARD — " + " · ".join(bits))
 
 
@@ -263,9 +307,23 @@ def _render(doc: dict) -> int:
     w_scope = max((len(r["scope"]) for r in rows), default=10)
     w_state = max(len(STATUSES[r["status"]][1]) for r in rows) if rows else 7
 
+    roles = {e.get("id"): e.get("role", "") for e in (doc.get("swarms") or [])}
+    grouped = len([e for e in (doc.get("swarms") or [])]) > 1
+
     print("```")
     print(_c(_header(doc), "bold", on))
+    seen_group = None
     for r in rows:
+        # With several swarms on one board a flat list of 30 rows hides which method is running.
+        # Group headings only appear when there is more than one swarm, so a single-swarm board
+        # renders exactly as it did before.
+        if grouped and r.get("swarm") != seen_group:
+            seen_group = r.get("swarm")
+            if seen_group:
+                label = f"{seen_group}" + (f" ({roles[seen_group]})"
+                                           if roles.get(seen_group) and
+                                           roles[seen_group] != seen_group else "")
+                print(_c(_sep(f"  -- {label} --"), "dim", on))
         mark, state, col = STATUSES[r["status"]]
         el = _elapsed(r)
         line = _sep(f"{r['n']:>3}. {mark} {r['agent']:<{w_agent}}  {r['scope']:<{w_scope}}  "

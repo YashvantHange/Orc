@@ -28,6 +28,7 @@ for _s in (ROOT, ROOT / "static", ROOT / "reports", ROOT / "evidence"):
     sys.path.insert(0, str(_s))
 
 import gate  # noqa: E402
+import impact_gate  # noqa: E402
 import runlog  # noqa: E402
 
 FID = "ZZTEST01"                    # a finding id no real hunt will ever use
@@ -37,7 +38,8 @@ SANDBOX = ROOT / "work" / "_gatetest"
 # ------------------------------------------------------------------------------- fixtures ---
 def _clean():
     for p in (gate.audit_path(FID, "factual"), gate.audit_path(FID, "editorial"),
-              gate.receipt_path(FID), ROOT / "state" / "dup" / f"{FID}.json"):
+              gate.receipt_path(FID), ROOT / "state" / "dup" / f"{FID}.json",
+              impact_gate.record_path(FID)):
         if p.exists():
             p.unlink()
     if SANDBOX.exists():
@@ -213,6 +215,19 @@ def test_cvss_substring_escape_hatch_is_gone():
 
 
 # ------------------------------------------------------------------------------- receipt ---
+def _impact_pass(vector: str = "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N", **over):
+    """Record an impact-bar decision. The answers are placeholders; the gate reads the verdict."""
+    ans = {"program": "github", "vector": vector, "attacker": "an unauthenticated remote caller",
+           "boundary": "unauth -> another tenant's data", "impact": "reads another tenant's rows",
+           "marginal_gain": "the same caller can otherwise read only its own rows",
+           "gadget": "request -> unchecked id -> row of another tenant, recorded",
+           "preconditions": [], "default_config": "yes", "override": ""}
+    ans.update(over)
+    verdict, blockers, notes = impact_gate.evaluate(ans)
+    impact_gate.write(FID, ans, verdict, blockers, notes)
+    return verdict
+
+
 def _pass_everything(rp: Path) -> dict:
     for _ in range(2):
         runlog.record(str(SANDBOX), FID, 'python -c "print(\'ok\')"')
@@ -221,6 +236,7 @@ def _pass_everything(rp: Path) -> dict:
     d = ROOT / "state" / "dup" / f"{FID}.json"
     d.parent.mkdir(parents=True, exist_ok=True)
     d.write_text(json.dumps({"verdict": "NOVEL", "checked_at": gate._now()}), encoding="utf-8")
+    _impact_pass()
     return _ctx(rp)
 
 
@@ -290,6 +306,112 @@ def test_unfilled_template_cannot_reach_a_receipt():
     assert not gate.receipt_path(FID).exists()
 
 
+# --------------------------------------------------------------------------- impact bar ---
+# These encode three real vendor closures. Each had a runtime PoC, two cold audits and a delivery
+# receipt, and each was still closed "not severe enough for us to track it as a security bug":
+# FIL-004 and FIL-005 (CI-guard defects, 2026-09-04) and SHAKA-003 (a CVSS 3.8 prototype-pollution
+# primitive, no demonstrated gadget, three stacked preconditions, 2026-09-08). Every other check in
+# gate.py passed all three, which is the whole reason this one exists.
+def test_impact_bar_blocks_below_the_severity_floor():
+    _clean()
+    assert _impact_pass(vector="CVSS:3.1/AV:A/AC:L/PR:N/UI:R/S:C/C:N/I:L/A:N") == "BLOCK"  # 3.8
+    assert not impact_gate.cleared(FID)[0]
+
+
+def test_impact_bar_blocks_a_primitive_with_no_gadget():
+    """SHAKA-003's own sentence: the PoC proves the primitive and stops there."""
+    _clean()
+    assert _impact_pass(gadget="") == "BLOCK"
+    assert "gadget" in impact_gate.load(FID)["blockers"][0]
+
+
+def test_impact_bar_blocks_three_stacked_preconditions():
+    _clean()
+    assert _impact_pass(preconditions=["app sets castReceiverAppId",
+                                       "viewer is actively casting",
+                                       "attacker controls the receiver"]) == "BLOCK"
+
+
+def test_impact_bar_requires_the_default_configuration_answer():
+    """The question that decided SHAKA-C8-001 cannot be skipped by not asking it."""
+    _clean()
+    assert _impact_pass(default_config="") == "BLOCK"
+    assert "default-config" in impact_gate.load(FID)["blockers"][0]
+
+
+def test_non_default_configuration_blocks_at_two_preconditions():
+    """SHAKA-C8-001 self-scored 7.1 C:H, stacked three conditions and came back P4/S4 Infeasible.
+    Non-default configuration is the heaviest of them, so two conditions including it is the same
+    shape as three ordinary ones — and two ordinary ones is still fine."""
+    _clean()
+    assert _impact_pass(default_config="no",
+                        preconditions=["app configures drm.servers[org.w3.clearkey]",
+                                       "attacker can influence the manifest"]) == "BLOCK"
+    assert "non-default configuration" in impact_gate.load(FID)["blockers"][0]
+    _clean()
+    assert _impact_pass(default_config="yes",
+                        preconditions=["attacker can influence the manifest",
+                                       "the victim plays the stream"]) == "PASS"
+
+
+def test_non_default_configuration_is_not_counted_twice():
+    """An answer of 'no' plus a precondition that already says 'configures' is ONE condition, not
+    two — the message has to be arithmetic a triager would accept."""
+    _clean()
+    assert _impact_pass(default_config="no",
+                        preconditions=["app configures a custom handler"]) == "PASS"
+
+
+def test_override_on_a_precondition_block_reports_the_observed_record():
+    """The operator may still override, but not without being told the record: SHAKA-C8-001 was
+    overridden on a five-point rationale and closed P4/S4 Infeasible anyway."""
+    _clean()
+    assert _impact_pass(default_config="no",
+                        preconditions=["app configures X", "attacker influences the manifest"],
+                        override="my call") == "PASS_OVERRIDDEN"
+    notes = " ".join(impact_gate.load(FID)["notes"])
+    assert "OVERRIDE RECORD" in notes and "SHAKA-C8-001" in notes
+
+
+def test_impact_bar_blocks_the_two_dead_classes():
+    _clean()
+    assert _impact_pass(ci_guard=True) == "BLOCK"
+    _clean()
+    assert _impact_pass(dev_tool=True) == "BLOCK"
+
+
+def test_impact_bar_passes_a_real_finding_and_records_the_override():
+    _clean()
+    assert _impact_pass() == "PASS"
+    ok, why = impact_gate.cleared(FID)
+    assert ok and "PASS" in why
+    # Only the user may override, and their words are kept verbatim in the decision.
+    assert _impact_pass(vector="CVSS:3.1/AV:A/AC:L/PR:N/UI:R/S:C/C:N/I:L/A:N",
+                        override="file it anyway, my call") == "PASS_OVERRIDDEN"
+    d = impact_gate.load(FID)
+    assert impact_gate.cleared(FID)[0] and d["answers"]["override"] == "file it anyway, my call"
+    assert d["blockers"], "an overridden decision must still record what it walked past"
+
+
+def test_impact_decision_goes_stale_when_the_vector_changes():
+    """A decision made on one vector cannot license a report that now claims another."""
+    _clean()
+    _impact_pass()
+    ok, why = impact_gate.cleared(FID, "CVSS:3.1/AV:A/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N = 2.0 (Low)")
+    assert not ok and "re-run" in why
+
+
+def test_delivery_gate_refuses_without_an_impact_decision():
+    """The point of the check: everything else passes and the receipt is still withheld."""
+    _clean()
+    rp = _report("# T\n\n| CVSS 3.1 | 6.5 - CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N |\n")
+    ctx = _pass_everything(rp)
+    impact_gate.record_path(FID).unlink()
+    results = {label: fn(ctx)[0] for label, fn in gate.checks_for("src")}
+    assert results["Impact bar"] is False
+    assert all(v for k, v in results.items() if k != "Impact bar"), results
+
+
 def _teardown():
     _clean()
     if SANDBOX.exists():
@@ -310,3 +432,70 @@ if __name__ == "__main__":
     _teardown()
     print(f"\n{len(fns) - bad}/{len(fns)} passed")
     sys.exit(1 if bad else 0)
+
+# --- Gap 1: quoted output must come from a recorded run ---
+
+def _quoted_ctx(report_txt, *runs):
+    return {
+        "report_txt": report_txt,
+        "runlog": {"runs": [{"stdout": r, "stderr": ""} for r in runs]},
+    }
+
+
+def test_quoted_output_present_passes():
+    run = "[HOST] GET /a?token=SECRET\n[HOST] GET /b\nRESULT: CONFIRMED\n"
+    report = "Evidence:\n\n```\n[HOST] GET /a?token=SECRET\n[HOST] GET /b\n```\n"
+    ok, msg = gate.check_quoted_output(_quoted_ctx(report, run))
+    assert ok, msg
+
+
+def test_stale_runlog_blocks():
+    """The real regression: the report quotes a case the recorded run never exercised."""
+    run = "[HOST] GET /a?token=SECRET\n[HOST] GET /b\n"
+    report = (
+        "Evidence:\n\n```\n"
+        "[HOST] GET /a?token=SECRET\n"
+        "[HOST] GET /legacy-init.mp4?token=SECRET\n"  # never run
+        "```\n"
+    )
+    ok, msg = gate.check_quoted_output(_quoted_ctx(report, run))
+    assert not ok
+    assert "do not appear in any recorded run" in msg
+    assert "legacy-init" in msg
+
+
+def test_source_fences_are_not_treated_as_output():
+    """A ```js patch or ```xml snippet is source, not captured output."""
+    run = "[HOST] GET /a\n"
+    report = (
+        "Root cause:\n\n```js\n"
+        "    this.lastManifestQueryParams_ = url.searchParams.toString();\n"
+        "```\n\n"
+        "Repro:\n\n```xml\n<RequestParam useMPDUrlQuery=\"true\"/>\n```\n"
+    )
+    ok, msg = gate.check_quoted_output(_quoted_ctx(report, run))
+    assert ok, msg
+
+
+def test_no_quoted_output_passes():
+    ok, msg = gate.check_quoted_output(_quoted_ctx("No fences here at all.\n", "[HOST] GET /a\n"))
+    assert ok
+    assert "no captured-output blocks" in msg
+
+
+def test_output_may_come_from_any_recorded_run():
+    """Counts vary between runs; a line present in run 2 is still evidenced."""
+    report = "```\n[HOST] GET /c\n```\n"
+    ok, msg = gate.check_quoted_output(_quoted_ctx(report, "[HOST] GET /a\n", "[HOST] GET /c\n"))
+    assert ok, msg
+
+
+def test_missing_runlog_blocks():
+    ok, msg = gate.check_quoted_output({"report_txt": "```\nx\n```\n"})
+    assert not ok
+
+
+def test_empty_recorded_output_blocks():
+    ok, msg = gate.check_quoted_output(_quoted_ctx("```\n[HOST] GET /a\n```\n", ""))
+    assert not ok
+    assert "captured no output" in msg

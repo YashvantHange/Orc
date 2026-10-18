@@ -1,0 +1,444 @@
+warning: LF will be replaced by CRLF in filament/fuzz/CMakeLists.txt.
+The file will have its original line endings in your working directory
+warning: LF will be replaced by CRLF in filament/fuzz/material_parser_fuzzer.cpp.
+The file will have its original line endings in your working directory
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 59058ee43..080b7abdb 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -85,6 +85,8 @@ option(FILAMENT_SUPPORTS_OSMESA "Enable OSMesa (headless GL context) for Filamen
+ 
+ option(FILAMENT_ENABLE_FGVIEWER "Enable the frame graph viewer" OFF)
+ 
++option(FILAMENT_ENABLE_FUZZERS "Build the libFuzzer targets for the asset parsers (requires clang)" OFF)
++
+ option(FILAMENT_USE_ABSEIL_LOGGING "Use Abseil to log, may increase binary size" OFF)
+ 
+ option(FILAMENT_ENABLE_EXPERIMENTAL_GCC_SUPPORT "Enable GCC support (unsupported)" OFF)
+diff --git a/filament/CMakeLists.txt b/filament/CMakeLists.txt
+index 32479e063..164948bf8 100644
+--- a/filament/CMakeLists.txt
++++ b/filament/CMakeLists.txt
+@@ -840,3 +840,4 @@ install(FILES "../LICENSE" DESTINATION .)
+ add_subdirectory(backend)
+ add_subdirectory(test)
+ add_subdirectory(benchmark)
++add_subdirectory(fuzz)
+diff --git a/filament/fuzz/CMakeLists.txt b/filament/fuzz/CMakeLists.txt
+new file mode 100644
+index 000000000..51ecfcdee
+--- /dev/null
++++ b/filament/fuzz/CMakeLists.txt
+@@ -0,0 +1,52 @@
++cmake_minimum_required(VERSION 3.19)
++project(filament-fuzzers)
++
++# Fuzz targets are opt-in: -DFILAMENT_ENABLE_FUZZERS=ON. They are built by OSS-Fuzz and can be
++# built locally with clang for reproducing a testcase.
++if (NOT FILAMENT_ENABLE_FUZZERS)
++    return()
++endif()
++
++if (IOS OR WASM OR ANDROID)
++    return()
++endif()
++
++if (NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
++    message(FATAL_ERROR "FILAMENT_ENABLE_FUZZERS requires clang (libFuzzer is a clang feature).")
++endif()
++
++# OSS-Fuzz passes the engine to link against in LIB_FUZZING_ENGINE, and instruments the rest of
++# the build through CFLAGS/CXXFLAGS. Outside OSS-Fuzz, fall back to plain libFuzzer, which has to
++# be applied at compile time as well so the target itself gets coverage instrumentation.
++if (DEFINED ENV{LIB_FUZZING_ENGINE})
++    set(FILAMENT_FUZZING_ENGINE "$ENV{LIB_FUZZING_ENGINE}")
++    set(FILAMENT_FUZZING_COMPILE_OPTIONS "")
++else()
++    set(FILAMENT_FUZZING_ENGINE "-fsanitize=fuzzer")
++    set(FILAMENT_FUZZING_COMPILE_OPTIONS "-fsanitize=fuzzer-no-link")
++endif()
++
++function(add_filament_fuzzer NAME)
++    add_executable(${NAME} ${NAME}.cpp)
++
++    # MaterialParser.h is private to the filament library.
++    target_include_directories(${NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
++
++    target_link_libraries(${NAME} PRIVATE filament filaflat filabridge utils)
++    target_link_libraries(${NAME} PRIVATE ${FILAMENT_FUZZING_ENGINE})
++
++    if (FILAMENT_FUZZING_COMPILE_OPTIONS)
++        target_compile_options(${NAME} PRIVATE ${FILAMENT_FUZZING_COMPILE_OPTIONS})
++    endif()
++
++    set_target_properties(${NAME} PROPERTIES FOLDER Fuzzers)
++
++    # A replay binary for the same entry point, with no fuzzing engine linked in. Used to
++    # reproduce a crashing testcase, including on toolchains that ship no libFuzzer runtime.
++    add_executable(${NAME}_standalone ${NAME}.cpp standalone_main.cpp)
++    target_include_directories(${NAME}_standalone PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
++    target_link_libraries(${NAME}_standalone PRIVATE filament filaflat filabridge utils)
++    set_target_properties(${NAME}_standalone PROPERTIES FOLDER Fuzzers)
++endfunction()
++
++add_filament_fuzzer(material_parser_fuzzer)
+diff --git a/filament/fuzz/material_parser_fuzzer.cpp b/filament/fuzz/material_parser_fuzzer.cpp
+new file mode 100644
+index 000000000..9b0117441
+--- /dev/null
++++ b/filament/fuzz/material_parser_fuzzer.cpp
+@@ -0,0 +1,272 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++/*
++ * Fuzz target for MaterialParser, the entry point that turns a .filamat blob into the
++ * descriptions Filament builds a Material from.
++ *
++ * Why this entry point: a .filamat file is untrusted input whenever an application loads a
++ * material it did not compile itself. Materials ship inside downloadable asset bundles, arrive
++ * over the network in the viewer library RemoteServer, or are read from a path the user chose.
++ * MaterialParser consumes that blob before validation happens anywhere else, so every field it
++ * decodes is attacker-controlled.
++ *
++ * The target drives the accessors as well as parse(). parse() only locates the shader-language
++ * chunk pair; the chunk decoders, which is where the length, count and offset arithmetic lives,
++ * do not run until an accessor asks for a chunk. A fuzzer that stopped at parse() would leave
++ * nearly all of that arithmetic uncovered.
++ */
++
++#include "MaterialParser.h"
++
++#include <private/filament/BufferInterfaceBlock.h>
++#include <private/filament/ConstantInfo.h>
++#include <private/filament/PushConstantInfo.h>
++#include <private/filament/SamplerInterfaceBlock.h>
++#include <private/filament/SubpassInfo.h>
++#include <private/filament/Variant.h>
++
++#include <filaflat/ChunkContainer.h>
++
++#include <backend/DriverEnums.h>
++
++#include <utils/CString.h>
++#include <utils/FixedCapacityVector.h>
++
++#include <array>
++
++#include <stddef.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++
++using namespace filament;
++using namespace filament::backend;
++
++namespace {
++
++// Oracle for the interface blocks.
++//
++// A BufferInterfaceBlock carries two things that have to agree: the size of the block, and the
++// offset of each field inside it. getSize() is what a consumer allocates -- FMaterialInstance
++// sizes its uniform buffer from it -- and getFieldOffset() is where that consumer then writes.
++// So the block is only self-consistent if every field it reports starts inside the block it
++// sized. If it ever reports a field beyond that, the parser has handed its caller an
++// out-of-bounds write, and the fault surfaces later in whichever consumer performs it rather
++// than here in the parser.
++//
++// Checking it here is what lets the fuzzer attribute the defect to the code that produced it.
++// Without this the same input is silently accepted and the process only crashes much later, in
++// a different library, under a stack that no longer names the parser.
++void checkInterfaceBlockInvariant(BufferInterfaceBlock const& uib) {
++    uint64_t const blockSize = uib.getSize();
++    if (blockSize == 0) {
++        return;
++    }
++
++    for (auto const& field: uib.getFieldInfoList()) {
++        // Offsets grow monotonically with the element index, so the first and last elements
++        // bound the range; there is no reason to walk a 16-million-element array.
++        uint64_t const elementCount = field.size == 0 ? 1 : uint64_t(field.size);
++
++        // Deliberately 64-bit, and computed here rather than through getBufferOffset(), which
++        // asserts on the index and is compiled out under NDEBUG.
++        uint64_t const lastOffset =
++                (uint64_t(field.offset) + uint64_t(field.stride) * (elementCount - 1))
++                        * sizeof(uint32_t);
++
++        if (lastOffset + sizeof(uint32_t) > blockSize) {
++            fprintf(stderr,
++                    "BufferInterfaceBlock reported field \"%s\" at byte offset %llu, "
++                    "outside the %llu-byte block it sized "
++                    "(offset=%u stride=%u elements=%llu)\n",
++                    field.name.c_str(), (unsigned long long) lastOffset,
++                    (unsigned long long) blockSize, unsigned(field.offset),
++                    unsigned(field.stride), (unsigned long long) elementCount);
++            abort();
++        }
++    }
++}
++
++// Ask for every language the parser knows about, so a blob carrying any one of the
++// language/dictionary chunk pairs reaches DictionaryReader::unflatten and MaterialChunk.
++utils::FixedCapacityVector<ShaderLanguage> preferredLanguages() {
++    auto languages = utils::FixedCapacityVector<ShaderLanguage>::with_capacity(4);
++    languages.push_back(ShaderLanguage::ESSL3);
++    languages.push_back(ShaderLanguage::ESSL1);
++    languages.push_back(ShaderLanguage::SPIRV);
++    languages.push_back(ShaderLanguage::MSL);
++    return languages;
++}
++
++// Every non-shader accessor. Each decodes an independent chunk, so this is where the per-chunk
++// length/count/offset arithmetic gets exercised.
++void driveAccessors(MaterialParser const& parser) {
++    uint32_t u32 = 0;
++    uint64_t u64 = 0;
++    uint8_t u8 = 0;
++    float f = 0.0f;
++    bool b = false;
++    utils::CString name;
++
++    parser.getMaterialVersion(&u32);
++    parser.getFeatureLevel(&u8);
++    parser.getName(&name);
++    parser.getCacheId(&u64);
++    parser.getShaderModels(&u32);
++    parser.getMaterialProperties(&u64);
++    parser.getMaterialCrc32(&u32);
++
++    // The interface blocks: field counts and per-field sizes from the blob decide the offsets a
++    // MaterialInstance later writes at, which makes this the highest-value arithmetic here.
++    BufferInterfaceBlock uib;
++    if (parser.getUIB(&uib)) {
++        checkInterfaceBlockInvariant(uib);
++    }
++
++    SamplerInterfaceBlock sib;
++    parser.getSIB(&sib);
++
++    SubpassInfo subpass;
++    parser.getSubpasses(&subpass);
++
++    utils::FixedCapacityVector<MaterialConstant> constants;
++    parser.getConstants(&constants);
++
++    utils::CString pushConstantStructVarName;
++    utils::FixedCapacityVector<MaterialPushConstant> pushConstants;
++    parser.getPushConstants(&pushConstantStructVarName, &pushConstants);
++
++    MaterialParser::BindingUniformInfoContainer bindingUniforms;
++    parser.getBindingUniformInfo(&bindingUniforms);
++
++    MaterialParser::AttributeInfoContainer attributes;
++    parser.getAttributeInfo(&attributes);
++
++    MaterialParser::DescriptorBindingsContainer descriptorBindings;
++    parser.getDescriptorBindings(&descriptorBindings);
++
++    MaterialParser::DescriptorSetLayoutContainer descriptorSetLayout;
++    parser.getDescriptorSetLayout(&descriptorSetLayout);
++
++    // Simple scalar and enum chunks.
++    parser.getDepthWriteSet(&b);
++    parser.getDepthWrite(&b);
++    parser.getDoubleSidedSet(&b);
++    parser.getDoubleSided(&b);
++    parser.getColorWrite(&b);
++    parser.getDepthTest(&b);
++    parser.getInstanced(&b);
++    parser.getMaskThreshold(&f);
++    parser.getAlphaToCoverageSet(&b);
++    parser.getAlphaToCoverage(&b);
++    parser.hasShadowMultiplier(&b);
++    parser.hasCustomDepthShader(&b);
++    parser.hasSpecularAntiAliasing(&b);
++    parser.getSpecularAntiAliasingVariance(&f);
++    parser.getSpecularAntiAliasingThreshold(&f);
++
++    CullingMode cullingMode{};
++    parser.getCullingMode(&cullingMode);
++    TransparencyMode transparencyMode{};
++    parser.getTransparencyMode(&transparencyMode);
++    Interpolation interpolation{};
++    parser.getInterpolation(&interpolation);
++    VertexDomain vertexDomain{};
++    parser.getVertexDomain(&vertexDomain);
++    MaterialDomain materialDomain{};
++    parser.getMaterialDomain(&materialDomain);
++    UserVariantFilterMask variantFilterMask{};
++    parser.getMaterialVariantFilterMask(&variantFilterMask);
++    Shading shading{};
++    parser.getShading(&shading);
++    BlendingMode blendingMode{};
++    parser.getBlendingMode(&blendingMode);
++    std::array<BlendFunction, 4> blendFunction{};
++    parser.getCustomBlendFunction(&blendFunction);
++    AttributeBitset requiredAttributes;
++    parser.getRequiredAttributes(&requiredAttributes);
++    RefractionMode refractionMode{};
++    parser.getRefractionMode(&refractionMode);
++    RefractionType refractionType{};
++    parser.getRefractionType(&refractionType);
++    ReflectionMode reflectionMode{};
++    parser.getReflectionMode(&reflectionMode);
++    StereoscopicType stereoscopicType{};
++    parser.getStereoscopicType(&stereoscopicType);
++
++    utils::CString sourceShader;
++    parser.getSourceShader(&sourceShader);
++
++    parser.computeCrc32();
++    pwarning: LF will be replaced by CRLF in filament/fuzz/standalone_main.cpp.
+The file will have its original line endings in your working directory
+arser.getPrecomputedCrc32();
++}
++
++// Pull shader blobs out of the material chunk. This path walks the per-variant index and then
++// decompresses through the blob dictionary, covering a different and larger slice of the parser
++// than the accessors above.
++void driveShaders(MaterialParser const& parser, uint8_t const selector) {
++    filaflat::ShaderContent content;
++
++    // Bounded on purpose: throughput matters more than trying all 256 variants, and the decode
++    // path is identical from one variant to the next.
++    constexpr size_t kVariantsPerInput = 4;
++
++    ShaderModel const models[] = { ShaderModel::MOBILE, ShaderModel::DESKTOP };
++    ShaderStage const stages[] = {
++        ShaderStage::VERTEX, ShaderStage::FRAGMENT, ShaderStage::COMPUTE
++    };
++
++    for (ShaderModel const model: models) {
++        for (ShaderStage const stage: stages) {
++            for (size_t i = 0; i < kVariantsPerInput; i++) {
++                Variant const variant{ uint8_t(selector + i) };
++                if (parser.hasShader(model, variant, stage)) {
++                    parser.getShader(content, model, variant, stage);
++                }
++            }
++        }
++    }
++}
++
++} // anonymous namespace
++
++extern "C" int LLVMFuzzerTestOneInput(uint8_t const* data, size_t size) {
++    if (size == 0) {
++        return 0;
++    }
++
++    MaterialParser parser(preferredLanguages(), data, size);
++
++    MaterialParser::ParseResult const result = parser.parse();
++
++    // ERROR_OTHER means the chunk container itself did not parse, so there is nothing behind the
++    // accessors. ERROR_MISSING_BACKEND is different: the container parsed and only the
++    // shader-language lookup failed, so every other chunk is still there to be decoded. A blob
++    // that carries an interface block but no shader dictionary is exactly the shape a minimised
++    // crash input tends to have, so keep going in that case.
++    if (result == MaterialParser::ParseResult::ERROR_OTHER) {
++        return 0;
++    }
++
++    driveAccessors(parser);
++
++    if (result == MaterialParser::ParseResult::SUCCESS) {
++        driveShaders(parser, data[0]);
++    }
++
++    return 0;
++}
+diff --git a/filament/fuzz/standalone_main.cpp b/filament/fuzz/standalone_main.cpp
+new file mode 100644
+index 000000000..35f424c5d
+--- /dev/null
++++ b/filament/fuzz/standalone_main.cpp
+@@ -0,0 +1,74 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++/*
++ * A main() that runs a fuzz target over files named on the command line, without linking
++ * libFuzzer. It exists so a crashing testcase can be replayed -- in a debugger, in CI, or on a
++ * machine whose toolchain has no libFuzzer runtime -- using the same entry point the fuzzer
++ * drives. It does not mutate anything and finds nothing on its own.
++ *
++ *   material_parser_fuzzer_standalone crash-abc123.filamat
++ */
++
++#include <cstdio>
++#include <cstdlib>
++#include <vector>
++
++#include <stddef.h>
++#include <stdint.h>
++
++extern "C" int LLVMFuzzerTestOneInput(uint8_t const* data, size_t size);
++
++int main(int argc, char** argv) {
++    if (argc < 2) {
++        std::fprintf(stderr, "usage: %s <testcase> [testcase...]\n", argv[0]);
++        return 2;
++    }
++
++    for (int i = 1; i < argc; i++) {
++        std::FILE* file = std::fopen(argv[i], "rb");
++        if (!file) {
++            std::fprintf(stderr, "cannot open %s\n", argv[i]);
++            return 2;
++        }
++
++        std::fseek(file, 0, SEEK_END);
++        long const length = std::ftell(file);
++        std::fseek(file, 0, SEEK_SET);
++
++        if (length < 0) {
++            std::fclose(file);
++            std::fprintf(stderr, "cannot size %s\n", argv[i]);
++            return 2;
++        }
++
++        std::vector<uint8_t> buffer(static_cast<size_t>(length), uint8_t(0));
++        if (length > 0 && std::fread(buffer.data(), 1, size_t(length), file) != size_t(length)) {
++            std::fclose(file);
++            std::fprintf(stderr, "cannot read %s\n", argv[i]);
++            return 2;
++        }
++        std::fclose(file);
++
++        std::printf("running %s (%ld bytes)\n", argv[i], length);
++        std::fflush(stdout);
++
++        LLVMFuzzerTestOneInput(buffer.data(), buffer.size());
++    }
++
++    std::printf("all %d testcase(s) returned normally\n", argc - 1);
++    return 0;
++}

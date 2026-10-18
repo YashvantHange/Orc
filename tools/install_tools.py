@@ -201,12 +201,36 @@ GH_RELEASE_TOOLS = {
     "trufflehog": ("trufflesecurity/trufflehog",   "trufflehog"),  # secrets, verified
 }
 
-# pip-installable, into the project venv (never system-wide)
+# pip-installable, into the project venv (never system-wide).
+# name -> (pip spec, console script to probe for).
+#
+# The probe is a CONSOLE SCRIPT, not `python -m <name>`. mitmproxy ships no __main__, so the old
+# `python -m mitmproxy --version` probe always failed and the installer reinstalled it on every run
+# - which mattered because that reinstall DOWNGRADES pyOpenSSL back to mitmproxy 11.0.2's declared
+# pin (<=24.3.0), and 24.3.0 cannot import against cryptography 50 ("module 'lib' has no attribute
+# 'GEN_EMAIL'"). The net effect was an installer that silently broke its own proxy each time it ran.
 PIP_TOOLS = {
-    "mitmproxy": "mitmproxy",   # scriptable intercepting proxy - the CLI answer to Burp
-    "sqlmap":    "sqlmap",      # SQL injection exploitation
-    "arjun":     "arjun",       # HTTP parameter discovery
-    "dirsearch": "dirsearch",   # path brute force
+    "mitmproxy": ("mitmproxy", "mitmdump"),  # scriptable intercepting proxy - the CLI answer to Burp
+    "sqlmap":    ("sqlmap", "sqlmap"),       # SQL injection exploitation
+    "arjun":     ("arjun", "arjun"),         # HTTP parameter discovery
+    "dirsearch": ("dirsearch", "dirsearch"), # path brute force
+}
+
+# How to ask a tool "are you alive". Not every tool answers --version: arjun exits 2 on it, and
+# sqlmap ships NO console script and no __main__ at all (so both `sqlmap.exe` and `python -m sqlmap`
+# fail) - it is a script under site-packages that has to be run with an interpreter. Probing every
+# tool the same way produced two confident false MISSINGs.
+PIP_PROBES = {
+    "arjun": ["-h"],
+}
+PIP_SCRIPTS = {
+    "sqlmap": (".venv/lib/site-packages/sqlmap/sqlmap.py", ["--batch", "--version"]),
+}
+
+# Upper pins a package declares that are wrong in practice, and what to force afterwards.
+# Only for the case where the declared pin is itself the broken thing.
+PIP_PIN_REPAIRS = {
+    "mitmproxy": ["pyOpenSSL>=25.1.0"],
 }
 
 # repo -> entrypoint. Tools that ship as a source tree, not a release artifact.
@@ -272,19 +296,61 @@ def install_gh_release(name: str, repo: str, binary: str) -> None:
     tmp.unlink(missing_ok=True)
 
 
-def install_pip_tool(name: str, spec: str) -> None:
-    """Install a python-based tool into the project venv."""
+def _venv_script(binary: str) -> Path:
+    """Path to a console script inside the project venv."""
+    d = ROOT / ".venv" / ("Scripts" if IS_WINDOWS else "bin")
+    return d / f"{binary}{EXE}"
+
+
+def _pip_tool_ok(binary: str) -> bool:
+    """Installed AND able to start. A tool whose entry point dies on import is not installed."""
+    script = PIP_SCRIPTS.get(binary)
+    if script:
+        path, args = script
+        full = ROOT / path
+        if not full.exists():
+            return False
+        try:
+            r = subprocess.run([_venv_python(), str(full)] + args,
+                               capture_output=True, text=True, timeout=180)
+            # sqlmap prints its version and then exits non-zero from its own teardown, so the
+            # output is the signal here, not the return code.
+            return bool((r.stdout or "").strip())
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    exe = _venv_script(binary)
+    if not exe.exists():
+        return False
+    try:
+        return subprocess.run([str(exe)] + PIP_PROBES.get(binary, ["--version"]),
+                              capture_output=True, text=True, timeout=120).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def install_pip_tool(name: str, spec: str, binary: str) -> None:
+    """Install a python-based tool into the project venv, then repair any pin it got wrong."""
     py = _venv_python()
-    probe = subprocess.run([py, "-m", spec.split("[")[0], "--version"],
-                           capture_output=True, text=True)
-    if probe.returncode == 0:
+    if _pip_tool_ok(binary):
         print(f"{name}: already installed"); return
     print(f"{name}: pip install {spec} ...")
     r = subprocess.run([py, "-m", "pip", "install", "-q", spec], capture_output=True, text=True)
-    if r.returncode == 0:
-        print(f"  installed -> {py} -m {name}")
-    else:
+    if r.returncode != 0:
         print(f"  !! pip install {spec} failed: {(r.stderr or '').strip().splitlines()[-1:]}")
+        return
+
+    for pin in PIP_PIN_REPAIRS.get(name, []):
+        # pip prints a dependency-conflict warning here, and that warning is correct-but-wrong:
+        # the DECLARED pin is the broken half. Resolving it by downgrading restores the crash.
+        print(f"  repairing pin: {pin}")
+        subprocess.run([py, "-m", "pip", "install", "-q", "--upgrade", pin],
+                       capture_output=True, text=True)
+
+    if _pip_tool_ok(binary):
+        print(f"  installed -> {_venv_script(binary)}")
+    else:
+        print(f"  !! {name} installed but {binary} will not start - run it by hand to see why")
 
 
 def install_git_tool(name: str, url: str, entry: str) -> None:
@@ -317,8 +383,8 @@ def report_manual(name: str, binaries: list[str], url: str, note: str) -> None:
 def install_offensive() -> None:
     for name, (repo, binary) in GH_RELEASE_TOOLS.items():
         install_gh_release(name, repo, binary)
-    for name, spec in PIP_TOOLS.items():
-        install_pip_tool(name, spec)
+    for name, (spec, binary) in PIP_TOOLS.items():
+        install_pip_tool(name, spec, binary)
     for name, (url, entry) in GIT_TOOLS.items():
         install_git_tool(name, url, entry)
     print("\nInstaller/GUI tools - detected only, install these yourself:")
@@ -339,10 +405,11 @@ def check() -> None:
         p = BIN / f"{binary}{EXE}"
         print(f"  {name:14} {'OK ' + str(p) if p.exists() else 'MISSING'}")
     py = _venv_python()
-    for name in PIP_TOOLS:
-        ok = subprocess.run([py, "-m", name, "--version"],
-                            capture_output=True, text=True).returncode == 0
-        print(f"  {name:14} {'OK (venv)' if ok else 'MISSING'}")
+    for name, (_spec, binary) in PIP_TOOLS.items():
+        ok = _pip_tool_ok(binary)
+        where = (str(ROOT / PIP_SCRIPTS[binary][0]) if binary in PIP_SCRIPTS
+                 else str(_venv_script(binary)))
+        print(f"  {name:14} {'OK (venv) ' + where if ok else 'MISSING'}")
     for name, (_url, entry) in GIT_TOOLS.items():
         p = BIN / name / entry
         print(f"  {name:14} {'OK ' + str(p) if p.exists() else 'MISSING'}")

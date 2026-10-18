@@ -36,7 +36,10 @@ the other is the single failure mode this section exists to prevent.
 **Two habits that keep the results honest:** pair every positive with a **negative control** (the same
 payload against a known-good route or the recon baseline), and **enumerate** rather than sending one
 payload — encodings (raw, url, double-url, unicode, mixed-case, null-byte), dialects (`{{7*7}}`,
-`${7*7}`, `#{7*7}`, `<%=7*7%>`), methods, and identities including the unauthenticated one.
+`${7*7}`, `#{7*7}`, `<%=7*7%>`), methods, and identities including the unauthenticated one. Build
+that set with `hunt payload --class <cls> --encodings all` rather than by hand — the corpus, its
+oracles and its negative controls live in `payload-forge`, and it generates only: what you send it
+through is still the scope-gated path below.
 
 **Narrate while it runs.** Runtime work is the slow part of a hunt, so emit a one-line progress update
 at each boundary — booting, sweep started, each class exercised with its verdict, a fire reproduced,

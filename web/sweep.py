@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 from dataclasses import asdict
@@ -29,6 +30,7 @@ import scope as S            # noqa: E402
 import _common as C          # noqa: E402
 import probe                 # noqa: E402
 import primitives as P       # noqa: E402
+import targeting_plan as TP   # noqa: E402
 
 # Which endpoints a primitive wants. `param_hints` picks the parameter to attack; `path_hints`
 # narrows the endpoint list. Empty means "the site root / any endpoint".
@@ -46,6 +48,34 @@ TARGETING = {
     "proto_pollution_server": {"path_hints": ["settings", "config", "preferences", "profile",
                                               "merge", "update"]},
     "deserial_cookie":  {},
+    # Arbitrary file WRITE. Was an UNCOVERED row: path_traversal greps for root:x: in a RESPONSE,
+    # which makes it a read primitive - nothing detected a write.
+    "arbitrary_file_write": {"param_hints": ["filename", "file", "path", "dest", "destination",
+                                             "output", "target", "name", "key"],
+                             "path_hints": ["upload", "import", "save", "export", "write",
+                                            "download", "attachment", "media"]},
+    # Execution injection. These were UNCOVERED rows: expr_injection handles template/expression
+    # evaluators, which is a different sink from a shell.
+    "cmdi_blind":       {"param_hints": ["q", "host", "ip", "cmd", "file", "name", "target",
+                                         "domain", "url", "ping"]},
+    "cmdi_oob":         {"param_hints": ["q", "host", "ip", "cmd", "file", "name", "target",
+                                         "domain", "url"]},
+    "arg_injection":    {"param_hints": ["url", "file", "path", "src", "input", "output",
+                                         "repo", "remote", "host"]},
+    "env_injection":    {"param_hints": ["lang", "locale", "env", "config", "profile"]},
+    # AI / LLM surface. Group G was entirely MANUAL before these.
+    "prompt_inject_direct":     {"param_hints": ["message", "prompt", "q", "query", "input",
+                                                 "text", "content"],
+                                 "path_hints": ["chat", "ask", "agent", "assistant", "completion",
+                                                "message", "ai", "llm", "copilot"]},
+    "prompt_inject_indirect":   {"param_hints": ["content", "body", "text", "description",
+                                                 "comment", "note"]},
+    "tool_authz_diff":          {"param_hints": ["message", "prompt", "query", "input"],
+                                 "path_hints": ["chat", "agent", "assistant", "tool", "ai"]},
+    "insecure_output_handling": {"param_hints": ["message", "prompt", "q", "input"],
+                                 "path_hints": ["chat", "ask", "agent", "render", "preview"]},
+    "mcp_surface_auth":         {},
+    "excessive_agency":         {},
     "idor_enum":        {"templated": True},
     "bfla_matrix":      {"path_hints": ["admin", "users", "internal", "manage", "settings",
                                         "billing", "export"]},
@@ -97,6 +127,13 @@ MANUAL_ROWS = {
     "Race conditions (multi-user)": ("A", "dynamic-hunt §1b (TOCTOU recipe)", "MANUAL"),
     "Prompt injection -> insecure output": ("G", "vuln-playbooks § AI/LLM-native", "MANUAL"),
     "Prompt-to-tool privilege escalation": ("G", "vuln-playbooks § Prompt-to-tool", "MANUAL"),
+    "Shadow / zombie API versions": ("E", "api-inventory Play 1 (version diff)", "MANUAL"),
+    "Unguarded API route group behind an SPA": ("A", "api-inventory Play 2 (bundle route map)",
+                                                "MANUAL"),
+    "Vector & embedding weaknesses (RAG)": ("G", "vuln-playbooks § Vector & embedding weaknesses",
+                                            "MANUAL"),
+    "Stack-specific surface (framework/platform)": ("F", "stack-playbooks (fingerprint first)",
+                                                    "MANUAL"),
 }
 
 GROUP_NAMES = {"A": "Access control & identity", "B": "Injection & execution",
@@ -152,17 +189,21 @@ FALLBACK_PATHS = {
 }
 
 
-def pick_targets(name: str, endpoints: list, limit: int = 6) -> list:
+def pick_targets(name: str, endpoints: list, limit: int = 6, plan: dict | None = None) -> list:
     """Endpoints worth pointing this primitive at, strongest evidence first.
 
     Ranking matters more than breadth: a parameter whose NAME matches the class (`?next=` for open
     redirect) is a far better guess than the first endpoint that happens to have any parameter, and
     picking wrong is how a real bug gets recorded as `clear`.
     """
+    # An agent's aim outranks every guess below it. It read the endpoint records - observed values,
+    # source, declared auth - which is the context the hint lists do not have and cannot acquire.
+    aimed = TP.targets_for(plan or {}, name)
+
     t = TARGETING.get(name, {})
     if t.get("fixed"):
         paths = [t["fixed"]] + [p for p in FALLBACK_PATHS.get(name, []) if p != t["fixed"]]
-        return [(p, "") for p in paths[:limit]]
+        return (aimed + [(p, "") for p in paths])[:limit]
 
     scored: list = []            # (rank, path, param) — lower rank is tried first
 
@@ -200,8 +241,27 @@ def pick_targets(name: str, endpoints: list, limit: int = 6) -> list:
     for i, p in enumerate(FALLBACK_PATHS.get(name, [])):
         scored.append((3 + i * 0.01, p, ph[0] if ph else ""))
 
+    # EVERY discovered parameter, whatever it is called.
+    #
+    # The hint lists are English and conventional: `q`, `search`, `file`, `next`. A target whose API
+    # says `suchbegriff`, `ref` or `payload` matches none of them, and before this tier the sweep
+    # attacked FALLBACK_PATHS instead - conventional paths that do not exist on that target - and
+    # reported a verdict for every class having never touched the real surface. Measured on a
+    # four-endpoint non-English target: 52 of 54 primitives hit no real endpoint, and no real
+    # parameter was attacked by anything.
+    #
+    # Ranked last so a named match still wins; present so the actual attack surface is never skipped
+    # merely because nobody guessed its vocabulary.
+    if ph:
+        for e in endpoints:
+            for p in e.get("params", []):
+                nm = (p.get("name") or "")
+                if nm and nm.lower() not in ph:
+                    scored.append((6, e["path"], nm))
+
     scored.sort(key=lambda s: s[0])
-    seen, out = set(), []
+    seen, out = set(), list(aimed)
+    seen.update(out)
     for _rank, path, param in scored:
         key = (path, param)
         if key not in seen:
@@ -248,11 +308,67 @@ def run_browser(base: str, workdir: Path, ctx: P.Ctx, scope, slug: str) -> list:
     return B.run_all(scope, slug, base, dom_candidates=dom, sensitive_path=sensitive, cookie=cookie)
 
 
+def _endpoint_is_real(base: str, endpoint: str, ctx: P.Ctx, cache: dict) -> bool:
+    """Does this path exist, or is it the target's soft-404 shell?
+
+    THE DEFECT THIS CLOSES. `primitives/__init__.py` states the rule in its own docstring - "an SPA
+    answers HTTP 200 for every unknown path ... a signal that matches the soft-404 fingerprint is
+    not a signal" - and recon captures the baseline to enforce it with. Nothing enforced it. Against
+    a loopback fixture that 200s for every path, a full sweep returned 5 HITs of which THREE were on
+    endpoints that do not exist (`/account`, `/oauth/authorize`): a 60% false-positive rate.
+
+    Asking each of 55 primitives to remember the check is how it got missed. This is central: one
+    request per endpoint, cached, applied to confirmations only - so a miss costs nothing and a
+    false confirmation cannot survive.
+    """
+    if not ctx.has_baselines():
+        return True            # no baseline captured: cannot judge, so do not silently downgrade
+    if endpoint in cache:
+        return cache[endpoint]
+
+    # A TEMPLATED path never exists verbatim. `GET /api/notes/{id}` is a 404 on every target in the
+    # world, so checking the literal would match the soft-404 shell and suppress exactly the
+    # findings the templated primitives exist to produce - the false-suppression this function's
+    # docstring calls intolerable. Substitute a concrete id, the same way the primitives do.
+    probe_path = endpoint
+    if "{" in endpoint and "}" in endpoint:
+        first = (str(ctx.opts.get("ids", "1")).split(",") or ["1"])[0].strip() or "1"
+        probe_path = re.sub(r"\{[^}]*\}", first, endpoint)
+
+    try:
+        r = probe.requests.get(base + probe_path, timeout=10)
+    except Exception:          # noqa: BLE001 - an unreachable path is not evidence either way
+        cache[endpoint] = True
+        return True
+    # STRICT test only: the structural fingerprint must MATCH the shell exactly.
+    #
+    # Ctx.is_soft_404() also has a length fallback with an absolute 16-byte floor
+    # (max(16, 2%)), which is far too loose for small responses: a real JSON endpoint
+    # returning 19 bytes against a 35-byte shell is |19-35| = 16 <= 16, judged a soft-404.
+    # That is tolerable for a primitive deciding whether to keep looking; it is NOT tolerable
+    # here, where a false match SUPPRESSES A CONFIRMED FINDING. Measured: using the loose test
+    # silently dropped a genuine SQLi on /api/search. Suppression only ever fires on an exact
+    # structural match with the shell.
+    shell = (ctx.baselines.get("soft_404") or {})
+    real = P.shape(r.text or "") != shell.get("fingerprint")
+    cache[endpoint] = real
+    return real
+
+
 def run(base: str, workdir: Path, ctx: P.Ctx, only: list | None = None,
         skip_slow: bool = False) -> dict:
     endpoints = load_endpoints(workdir)
+    discovered_paths = {e.get("path") for e in endpoints if e.get("path")}
+    try:
+        plan = TP.load(workdir, endpoints)
+    except TP.PlanError as e:
+        # Fail loud. Falling back silently would reproduce the under-testing the plan exists to fix.
+        print(f"  ! targeting plan rejected: {e}", flush=True)
+        plan = {}
+    print(f"  {TP.summary(plan)}", flush=True)
     names = only or sorted(probe.PRIMITIVES)
     results, by_group = [], {}
+    soft404_cache: dict = {}
 
     for name in names:
         meta = probe.PRIMITIVE_META.get(name, {})
@@ -261,20 +377,56 @@ def run(base: str, workdir: Path, ctx: P.Ctx, only: list | None = None,
             results.append(P.blocked(name, "", "skipped by --fast (timing/volume probe)"))
             by_group.setdefault(group, []).append(results[-1])
             continue
+        na = TP.not_applicable(plan, name)
+        if na:
+            # Only an agent can justify N/A: it is a claim that the surface does not exist, which
+            # needs a reason a reviewer can check. The reason is carried into the result.
+            r = P.ProbeResult(name, False, "", detail=f"N/A (agent): {na}",
+                              evidence={"not_applicable": True, "why": na, "source": "plan"})
+            results.append(r)
+            by_group.setdefault(group, []).append(r)
+            continue
+
         best = None
-        for endpoint, param in pick_targets(name, endpoints):
+        touched_real = False
+        for endpoint, param in pick_targets(name, endpoints, plan=plan):
+            if endpoint in discovered_paths:
+                touched_real = True
             try:
                 r = probe.run_primitive(base, name, endpoint, param=param or None, ctx=ctx)
             except S.ScopeViolation as v:
                 r = P.blocked(name, endpoint, f"scope refused this request: {v.reason}")
             except Exception as e:                     # noqa: BLE001 - one bad probe can't end a sweep
                 r = P.ProbeResult(name, False, endpoint, detail=f"error: {type(e).__name__}: {e}")
+            why = TP.why_for(plan, name, endpoint, param)
+            if why:
+                r.evidence.setdefault("aimed_by", "agent")
+                r.evidence.setdefault("why_this_target", why)
+            if r.confirmed and not _endpoint_is_real(base, endpoint, ctx, soft404_cache):
+                # The probe fired against the soft-404 shell, not against a real route. That is an
+                # artifact of the target answering 200 for everything, never a finding.
+                r = P.not_confirmed(
+                    name, endpoint,
+                    "a signal appeared at " + endpoint + " but that path matches the target's "
+                    "soft-404 baseline - the endpoint does not exist, so the signal is the shell, "
+                    "not the app")
+                r.evidence["soft_404_suppressed"] = True
+
             if r.confirmed:
                 best = r
                 break
             # a BLOCKED result outranks a plain miss — it means "not tested", not "defended"
             if best is None or (r.evidence.get("blocked") and not best.evidence.get("blocked")):
                 best = r
+        # A miss against paths that do not exist on this target is not evidence about this target.
+        # Without this, a class whose vocabulary nobody guessed comes back looking exercised.
+        if best is not None and not best.confirmed and not touched_real and endpoints:
+            best = P.blocked(
+                name, best.endpoint,
+                "no discovered endpoint matched this class - only conventional paths were tried, "
+                "so the target's real surface is untested for it. Point it by hand: "
+                f"hunt web probe <url> --primitive {name} --endpoint <path> --param <name>")
+
         if best is not None:
             results.append(best)
             by_group.setdefault(group, []).append(best)
@@ -282,21 +434,38 @@ def run(base: str, workdir: Path, ctx: P.Ctx, only: list | None = None,
 
 
 def verdict(r) -> str:
+    """Map a ProbeResult onto the word the coverage matrix prints.
+
+    CLEAR IS NOT THE FALLTHROUGH ANY MORE, and that is the point of this function.
+
+    It used to be: anything not confirmed, blocked or browser-bound came back "CLEAR", which meant a
+    timing probe that saw no delay and a blind probe whose callback never arrived were both recorded
+    as "surface exists, checked, defended". Absence of signal is not evidence of absence, so a probe
+    that fires blank is now NOT-CONFIRMED and its matrix row stays open.
+
+    CLEAR is reachable only when the primitive says so through `primitives.cleared()`, which requires
+    naming the guard that rejected the attack and the attack it rejected. See dynamic/verdict.py.
+    """
     if r.confirmed:
         return "HIT"
     if r.evidence.get("blocked"):
         return "BLOCKED"
     if r.evidence.get("needs_browser"):
         return "NEEDS-BROWSER"
-    return "CLEAR"
+    if r.evidence.get("needs_oob"):
+        return "NEEDS-OOB"
+    if r.evidence.get("cleared"):
+        return "CLEAR"
+    return "NOT-CONFIRMED"
 
 
 def report(base: str, out: dict, ctx: P.Ctx, workdir: Path) -> int:
     results = out["results"]
     hits = [r for r in results if verdict(r) == "HIT"]
     blocked_ = [r for r in results if verdict(r) == "BLOCKED"]
-    nobrowser = [r for r in results if verdict(r) == "NEEDS-BROWSER"]
+    nobrowser = [r for r in results if verdict(r) in ("NEEDS-BROWSER", "NEEDS-OOB")]
     clear = [r for r in results if verdict(r) == "CLEAR"]
+    unconfirmed = [r for r in results if verdict(r) == "NOT-CONFIRMED"]
 
     print(f"\ncoverage sweep — {base}   ({out['endpoints']} endpoints known)")
     if not ctx.has_baselines():
@@ -308,7 +477,8 @@ def report(base: str, out: dict, ctx: P.Ctx, workdir: Path) -> int:
         for r in sorted(out["by_group"][g], key=lambda x: (not x.confirmed, x.name)):
             v = verdict(r)
             mark = {"HIT": "HIT          ", "BLOCKED": "BLOCKED      ",
-                    "NEEDS-BROWSER": "NEEDS-BROWSER", "CLEAR": "clear        "}[v]
+                    "NEEDS-BROWSER": "NEEDS-BROWSER", "NEEDS-OOB": "NEEDS-OOB    ",
+                    "CLEAR": "clear        ", "NOT-CONFIRMED": "not-confirmed"}[v]
             meta = probe.PRIMITIVE_META.get(r.name, {})
             extra = " [detection-only]" if meta.get("detection_only") else ""
             print(f"    [{mark}] {r.name:24} {r.endpoint[:28]:28} {r.detail[:78]}{extra}")
@@ -318,8 +488,11 @@ def report(base: str, out: dict, ctx: P.Ctx, workdir: Path) -> int:
     for row, (g, where, kind) in sorted(MANUAL_ROWS.items(), key=lambda kv: kv[1][0]):
         print(f"    [{kind:13}] {g}  {row:38} -> {where}")
 
-    print(f"\n  {len(hits)} HIT · {len(blocked_)} BLOCKED · {len(nobrowser)} NEEDS-BROWSER · "
-          f"{len(clear)} clear · {len(MANUAL_ROWS)} manual rows outstanding")
+    print(f"\n  {len(hits)} HIT · {len(blocked_)} BLOCKED · {len(nobrowser)} NEEDS-SIGNAL · "
+          f"{len(unconfirmed)} not-confirmed · {len(clear)} clear · {len(MANUAL_ROWS)} manual rows outstanding")
+    if unconfirmed:
+        print("\n  not-confirmed means SENT AND NOTHING CAME BACK — not defended. The")
+        print("  payload may be wrong, the callback filtered, the timing masked - these rows stay open.")
     if nobrowser:
         print("  Install the browser to close those rows:")
         print("    .venv/Scripts/python.exe -m pip install playwright && "

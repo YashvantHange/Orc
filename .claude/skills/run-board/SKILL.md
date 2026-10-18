@@ -26,8 +26,12 @@ the start of the hunt, then mutate one row at a time:
 ```
 hunt board init <target> --kind src --step 1/9 \
      --row "web-recon-hunter:surface inventory" \
-     --row "injection-hunter:B injection & exec" \
-     --row "authz-logic-hunter:A access control" ...
+     --row "target-aimer:aim the probes at this target" \
+     --row "rce-exec-hunter:B code execution" \
+     --row "server-side-hunter:C fetch, files & protocol" \
+     --row "authz-logic-hunter:A access control" \
+     --row "dynamic-prover:runtime confirmation loop" \
+     --row "chain-analyzer:compose findings into attack paths" ...
 
 hunt board start  <target> 2 --result "tracing 6 ranked leads"
 hunt board set    <target> 2 --result "7/11 classes · 1 HIT (SSTI /render)" --show
@@ -59,10 +63,10 @@ board — but you produce it with the command, never by hand.
 ```
 HUNT BOARD — acme/example-app (src) · step 5/9 · covered 23/47 · 3 HIT · 18 CLEAR · 2 BLOCKED
   1. [x] web-recon-hunter     surface inventory     done     61 endpoints · 118 params · 3 identities
-  2. [>] injection-hunter     B injection & exec    RUNNING  7/11 classes · 1 HIT (SSTI /render)
+  2. [>] rce-exec-hunter      B code execution      RUNNING  7/11 sinks · 1 HIT (SSTI /render)
   3. [>] authz-logic-hunter   A access control      RUNNING  12/13 classes · 0 HIT
   4. [x] authn-crypto-hunter  C identity & secrets  done     0 HIT · 9 CLEAR · 1 BLOCKED
-  5. [ ] client-side-hunter   D client-side         queued   browser required
+  5. [ ] xss-hunter           D cross-site scripting queued   browser required
   6. [ ] report-writer        EX-01 · github        queued
   7. [ ] report-auditor       EX-01 · factual       queued
   8. [ ] report-editor        EX-01 · editorial     queued
@@ -170,7 +174,7 @@ HUNT BOARD — acme/example-app (src) · step 6/12 · covered 31/47 · 1 CONFIRM
   7. [x] report-auditor       EX-01 · factual   PASS     18/18 file:line verified at 6b0c9c1
   8. [>] report-editor        EX-01 · editorial RUNNING
   9. [ ] delivery gate        EX-01 · receipt   queued
- 10. [ ] injection-hunter     B — resume        queued   3 classes left after EX-01 ships
+ 10. [ ] rce-exec-hunter      B — resume        queued   3 sinks left after EX-01 ships
 ```
 
 A second finding opens a second lane with its own rows (11, 12, 13, 14), never by reusing the first
@@ -192,3 +196,60 @@ same order. The board is the narration; the todo list is the checkbox.
 - Do not hand-type a board block. If you find yourself typing `HUNT BOARD —` into a message, the state
   and the print have already diverged; run `hunt board show` instead.
 - Do not replace the board with prose. Prose goes *after* it, when something needs explaining.
+
+## Swarm rows
+
+A sized swarm lands in ONE call, not row by row:
+
+```
+hunt board swarm <target> --member "rce-exec-hunter#1:services/api/** · deserialization"                           --member "rce-exec-hunter#2:workers/** · model loading" ...                           --passes 2 --plan sha256:...
+```
+
+This does not violate "the roster never grows as you go": a swarm's width and membership are decided
+once, after recon and aiming, **before any member is tasked**, so the user sees the full shape
+immediately. Numbers stay stable and nothing is ever renumbered, exactly as everywhere else.
+
+- Member rows carry a disambiguated label — `rce-exec-hunter#2` — with the shard in the `scope`
+  column. The renderer auto-widens, so nothing else changes.
+- The header gains `· swarm 24` and, when the swarm runs in more than one pass, `· pass 1/2`.
+- A degraded shared limiter shows as `· LIMITER_DEGRADED`. It means every request is being
+  serialised and the swarm that is running is not the swarm that was sized — treat it as loud.
+- `hunt board show <target> --watch` is the right view at 30 rows and already self-terminates.
+
+### A fleet: several swarms, one board
+
+`hunt board swarm <target> --id <role> --role <role> --member ...` adds each swarm of a fleet in its
+own call. With more than one swarm the rows are printed under a group heading per swarm and the
+header reads `fleet 4x30` instead of `swarm 30`; with a single swarm nothing changes.
+
+```
+HUNT BOARD — acme (src) · step 5/9 · covered 23/47 · 3 HIT · 18 CLEAR · fleet 4x30
+  1. [x] web-recon-hunter              surface inventory        done     61 endpoints
+  -- coverage --
+  2. [>] coverage/rce-exec-hunter#1    code execution           RUNNING  7/11 sinks · 1 HIT
+  -- depth --
+  6. [~] depth/rce-exec-hunter#1       Registry / plugin table  HANDOFF  eval sink -> prove#1
+  -- prove --
+ 14. [>] prove/dynamic-prover#1        handoffs from rce-exec   RUNNING  confirming F021
+```
+
+`[~] HANDOFF` is the sixth row state. A member that handed its lead to another is neither `done` (no
+verdict was produced) nor `blocked` (nothing defeated it), and marking it either way lies about what
+happened. It is **not** counted in the tally — the receiving member's verdict is the one that counts,
+and counting both would count the row twice.
+
+Forged swarm members are registered below by `hunt swarm forge` and removed by `hunt swarm retire`.
+Do not hand-edit the block.
+
+<!-- SWARM-REGISTRY:BEGIN -->
+- **ads-overlay-hunter** - forged swarm member, dispatched as part of the sized swarm (see `swarm` skill).
+- **cast-ipc-hunter** - forged swarm member, dispatched as part of the sized swarm (see `swarm` skill).
+- **linux-privesc-hunter** - forged swarm member, dispatched as part of the sized swarm (see `swarm` skill).
+- **media-manifest-hunter** - forged swarm member, dispatched as part of the sized swarm (see `swarm` skill).
+- **moq-transport-hunter** - forged swarm member, dispatched as part of the sized swarm (see `swarm` skill).
+- **packaging-supplychain-hunter** - forged swarm member, dispatched as part of the sized swarm (see `swarm` skill).
+- **shell-quoting-hunter** - forged swarm member, dispatched as part of the sized swarm (see `swarm` skill).
+- **telemetry-egress-hunter** - forged swarm member, dispatched as part of the sized swarm (see `swarm` skill).
+- **text-render-hunter** - forged swarm member, dispatched as part of the sized swarm (see `swarm` skill).
+- **wayland-session-hunter** - forged swarm member, dispatched as part of the sized swarm (see `swarm` skill).
+<!-- SWARM-REGISTRY:END -->

@@ -363,6 +363,15 @@ def second_order(base: str, endpoint: str, param: str = "value", ctx: Ctx | None
             return ProbeResult("second_order", True, endpoint, payload, r.status_code,
                                f"stored value evaluated as a template at {readback}",
                                {"sink_kind": kind, "readback": readback})
+        if kind == "sql" and _err(body):
+            # This branch was missing: the sql payload was sent on every run and no result ever
+            # examined it, so a stored value reaching a later query could never be reported here.
+            # Reuses _err() so there is one SQL-error signature in this module, not two.
+            return ProbeResult("second_order", True, endpoint, payload, r.status_code,
+                               f"stored value reached a SQL parser at {readback} "
+                               f"({_err(body)}) - the read-back path builds a query from it",
+                               {"sink_kind": kind, "readback": readback,
+                                "db_error": _err(body), "snippet": body[:300]})
         if kind == "csv-formula" and payload in body and "csv" in (
                 r.headers.get("Content-Type", "").lower()):
             return ProbeResult("second_order", True, endpoint, payload, r.status_code,

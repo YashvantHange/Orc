@@ -102,10 +102,24 @@ starts. Print the final board yourself when it returns. Give it this brief:
      `profile.json`. `url`/`grey`: scope cleared + baselines
      captured. If it cannot be booted, say so and treat every class as `BLOCKED (no runtime)` unless
      confirmed via the faithful-harness path in `dynamic-hunt` §3.
-  4. Route ranked leads (and code the scanners flagged nothing on) to **authz-logic-hunter**,
-     **injection-hunter**, **authn-crypto-hunter**, **client-side-hunter** — in parallel where
-     independent. Cover **every applicable row of the coverage matrix** (`vuln-playbooks` § "Required
-     coverage — the matrix"): ~55 classes in seven groups — A access control & identity · B injection
+  4. Route ranked leads (and code the scanners flagged nothing on) to the ten hunters —
+     **authz-logic-hunter**, **rce-exec-hunter**, **server-side-hunter**, **datastore-hunter**,
+     **xss-hunter**, **resource-dos-hunter**, **authn-crypto-hunter**, **client-side-hunter**,
+     **injection-hunter** (AI-native taint + unclaimed sinks), after **web-recon-hunter** on a live
+     target. **Prefer a sized swarm to fixed waves.** Load the `swarm` skill. `hunt swarm plan` computes the
+width from the target and the program's own limits (up to 30 at once) and refuses to leave any
+applicable matrix row unowned; `hunt board swarm` puts the whole membership on the board in one call.
+The old wave cap is now enforced in code rather than by a number in this brief — `concurrency` is
+shared across processes in `work/<slug>/web/limits.json`.
+
+**If the orchestrator hands back a swarm plan instead of results**, it had no Task tool — a nested
+subagent cannot spawn subagents. **This session performs the fan-out itself**; do not re-delegate to
+another nested orchestrator. That failure has happened three times.
+
+**Otherwise, run them in waves, not all at once** — parallel-spawning the whole roster has killed a
+     hunt on provider rate limits; the wave order and the full routing map are in `sec-orchestrator`
+     step 4. Cover **every applicable row of the coverage matrix** (`vuln-playbooks` § "Required
+     coverage — the matrix"): ~89 classes in seven groups — A access control & identity · B injection
      & execution · C untrusted fetch & files · D client-side · E API & protocol · F infrastructure &
      config · G AI/LLM-native. Each row is tagged with the kinds it applies to and its owner. Each
      comes back `HIT` / `CLEAR` / `N/A` / `BLOCKED` with a reason **and the request that produced it**.

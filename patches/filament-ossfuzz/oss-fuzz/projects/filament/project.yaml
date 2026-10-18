@@ -1,0 +1,12 @@
+homepage: "https://google.github.io/filament/"
+language: c++
+primary_contact: "filament-oss@google.com"
+main_repo: "https://github.com/google/filament"
+file_github_issue: true
+sanitizers:
+  - address
+  - undefined
+architectures:
+  - x86_64
+fuzzing_engines:
+  - libfuzzer

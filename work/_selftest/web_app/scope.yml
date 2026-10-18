@@ -1,0 +1,28 @@
+# Scope for the LOOPBACK self-test fixture. This is not a bug-bounty program: the target is a Flask
+# app we launch ourselves on 127.0.0.1, so allow_private is correct here and nowhere else.
+schema: 1
+program:
+  name: selftest-web_app
+  url: http://127.0.0.1:8031/
+  authorized_by: self-hosted fixture (work/_selftest/web_app) - no third party involved
+in_scope:
+  schemes: [http]
+  hosts: ["127.0.0.1", "localhost"]
+  allow_private: true
+  paths: [".*"]
+out_of_scope:
+  paths: ["^/_debug/.*"]
+limits:
+  rps: 200
+  burst: 200
+  concurrency: 4
+  max_requests: 20000
+  timeout_s: 10
+  max_redirects: 3
+methods:
+  allow: [GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS]
+  deny: [TRACE, CONNECT]
+safety:
+  dry_run: false
+  destructive_paths: []
+required_headers: {}

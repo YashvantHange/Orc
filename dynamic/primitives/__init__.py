@@ -56,6 +56,33 @@ def blocked(name: str, endpoint: str, why: str) -> ProbeResult:
                        evidence={"blocked": True, "reason": why})
 
 
+def cleared(name: str, endpoint: str, guard: str, attack: str) -> ProbeResult:
+    """The attack was sent and a guard was observed rejecting it — and both can be named.
+
+    THE ONLY WAY A PRIMITIVE PRODUCES A CLEAR. It used to be what `web/sweep.py:verdict()` returned
+    by falling off the end of its if-chain, which meant a blind or timing probe that simply did not
+    fire was recorded as "surface exists, checked, defended". A probe that returns nothing now
+    reports NOT-CONFIRMED instead, and reaching CLEAR takes this call and the two facts it demands.
+
+      guard   what the target did to stop it  ("400 + realpath() prefix check")
+      attack  what was actually sent          ("../../etc/passwd x 6 encodings")
+
+    If you cannot fill in both, you do not have a CLEAR.
+    """
+    return ProbeResult(name, False, endpoint, detail=f"CLEAR: {guard} rejected {attack}",
+                       evidence={"cleared": True, "guard": guard, "attack": attack})
+
+
+def not_confirmed(name: str, endpoint: str, why: str) -> ProbeResult:
+    """Sent, nothing came back, and we are NOT claiming the bug is absent.
+
+    The honest default for a probe that fires blank: the payload may be wrong, the callback
+    egress-filtered, the timing masked by jitter. Leaves the matrix row open.
+    """
+    return ProbeResult(name, False, endpoint, detail=f"NOT-CONFIRMED: {why}",
+                       evidence={"not_confirmed": True, "reason": why})
+
+
 # --------------------------------------------------------------------------- registry ---
 REGISTRY: dict = {}
 META: dict = {}
@@ -205,4 +232,5 @@ def median(xs: list) -> float:
 
 
 # Importing the modules is what populates REGISTRY.
-from . import injection, access, authn, websurface, apis  # noqa: E402,F401
+from . import (injection, access, authn, websurface, apis,  # noqa: E402,F401
+               aisurface, execinject, filewrite)            # noqa: E402,F401

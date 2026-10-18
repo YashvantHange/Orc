@@ -43,6 +43,9 @@ from urllib.parse import urlsplit, urlunsplit
 
 import requests as _requests
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from limits import BudgetExhausted, SharedLimiter, _FileLock  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 
 EXIT_SCOPE_REFUSAL = 3          # distinct from 1 (not confirmed) and 2 (usage)
@@ -111,6 +114,10 @@ class Scope:
     _sem: threading.Semaphore | None = field(default=None, repr=False)
     _sent: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    # Set by attach_shared() once a workdir is known. While it is None the in-memory counters above
+    # are the authority (loopback targets we launched); once set, the file is, and the in-memory
+    # counters are bypassed entirely rather than kept in parallel — two authorities is the bug.
+    _shared: SharedLimiter | None = field(default=None, repr=False)
 
     # ---------------------------------------------------------------------- loading ---
     @classmethod
@@ -172,6 +179,19 @@ class Scope:
             v = (self.raw.get("test_window") or {}).get(k)
             if v is not None and _parse_ts(v) is None:
                 raise ScopeError(f"{self.path}: test_window.{k}={v!r} is not an ISO-8601 timestamp")
+        prox = self.raw.get("proxy")
+        if prox is not None:
+            if not isinstance(prox, dict):
+                raise ScopeError(f"{self.path}: proxy must be a mapping of {{http, https, verify}}")
+            for k in ("http", "https"):
+                v = prox.get(k)
+                if v is not None and (not isinstance(v, str) or not urlsplit(v).scheme):
+                    raise ScopeError(f"{self.path}: proxy.{k}={v!r} must be a URL like "
+                                     f"http://127.0.0.1:8081")
+            ver = prox.get("verify")
+            if ver is not None and not isinstance(ver, (bool, str)):
+                raise ScopeError(f"{self.path}: proxy.verify must be a CA bundle path or a boolean")
+
         rh = self.safety.get("required_headers")
         if rh is not None:
             if not isinstance(rh, dict):
@@ -210,6 +230,22 @@ class Scope:
         return self.safety.get("user_agent") or "sec-research/1.0 (authorized scope testing)"
 
     @property
+    def proxy(self) -> dict:
+        """Optional upstream proxy: {http, https, verify}.
+
+        Present so the whole in-house path can be recorded through mitmproxy alongside the external
+        tools, or watched live through a Burp/ZAP listener. Absent by default — an unset key must
+        leave requests' own behaviour untouched, including its trust_env handling.
+
+        `verify` is normally the path to the intercepting proxy's CA certificate. It may be set to
+        false, which is why lint() warns about it: TLS verification off against a live target means a
+        third party on the path can read and rewrite the traffic, and the transcript would record the
+        rewritten version as if the target had sent it.
+        """
+        p = self.raw.get("proxy") or {}
+        return {str(k): v for k, v in p.items()} if isinstance(p, dict) else {}
+
+    @property
     def required_headers(self) -> dict:
         """Headers the program's policy *requires* on every request (attribution headers such as
         HackerOne's X-HackerOne-Research). ScopedSession applies these to the whole session, so a
@@ -222,6 +258,21 @@ class Scope:
 
     # ----------------------------------------------------------------- the decision ---
     def explain(self, method: str, url: str) -> dict:
+        # A malformed URL used to escape as a raw urllib ValueError from deep inside the parser
+        # ("Port could not be cast to integer value as '8099C:'"), which reads like a pipeline crash
+        # rather than what it is. The usual cause on Windows is MSYS rewriting a leading-slash
+        # argument (--endpoint /api/x) into C:/Program Files/Git/api/x, and the message must say so
+        # or the operator debugs the wrong layer - it cost two wrong diagnoses to learn that once.
+        try:
+            _probe = urlsplit(url)
+            _ = _probe.port
+        except ValueError as e:
+            return {"allowed": False, "rule": "url.malformed",
+                    "reason": (f"{url!r} is not a parseable URL ({e}). On Windows this is usually "
+                               f"MSYS path conversion rewriting a leading-slash argument into a "
+                               f"C:\... path - set MSYS_NO_PATHCONV=1 for that argument, or pass "
+                               f"the endpoint without a leading slash.")}
+
         """Pure, network-free scope decision. Returns {allowed, reason, rule}. The one function
         the tests drive — check() is just this plus side effects."""
         method = (method or "GET").upper()
@@ -299,6 +350,11 @@ class Scope:
                         f"host {host} resolves to non-public {ip} — set in_scope.allow_private only "
                         f"for a target you launched yourself", method, url, "in_scope.allow_private")
 
+        # With a shared limiter attached the budget is spent in acquire(), against the file every
+        # participating process locks. Counting here too would double-charge each request.
+        if self._shared is not None:
+            return
+
         budget = int(self.limits["max_requests"])
         with self._lock:
             if self._sent >= budget:
@@ -306,6 +362,77 @@ class Scope:
                                      f"only if the program's policy allows it", method, url,
                                      "limits.max_requests")
             self._sent += 1
+
+    # ------------------------------------------------------------- rate & budget spending ---
+    def attach_shared(self, path: str | Path) -> None:
+        """Route rate and budget through a file every process testing this target locks.
+
+        Called by ScopedSession once the workdir is known, and by the mitmproxy gate with the same
+        path, so an external tool and the in-house primitives draw down ONE budget. Without this the
+        two processes each get a full max_requests — see limits.py for why that is an authorization
+        defect and not merely an inconsistency.
+
+        ALWAYS attached when there is a scope FILE, including a loopback one. It is tempting to skip
+        it for a target we launched ourselves - it costs a measured 52 ms per request, two lock
+        cycles each opening, locking, reading and rewriting the state file, which is ~10 minutes
+        across a full sweep's ~11k requests. That skip was tried and REVERTED: the shared budget is
+        also what makes a proxied external tool's traffic accountable, and
+        tests/test_exttool_live.py asserts exactly that on a loopback target. limits.py's "cheap
+        path" reasoning applies to Scope.local() - the IMPLICIT scope with no file - because writing
+        a scope file is opting into this accounting.
+
+        The cost is real and the honest fix is to make this cheaper (one lock cycle for rate, budget
+        and slot instead of two), not to stop sharing.
+        """
+        lim = self.limits
+        # concurrency moves to the file for the same reason the budget did. It was the one limit
+        # left in process memory: N agent processes each got their own semaphore, so a scope
+        # authorising 2 in flight permitted 2*N. requests' timeout is per-read rather than total,
+        # so the TTL is a crash backstop sized well above any single exchange - liveness, not the
+        # clock, is what actually frees a slot.
+        self._shared = SharedLimiter(path, rps=lim["rps"], burst=lim["burst"],
+                                     max_requests=int(lim["max_requests"]),
+                                     concurrency=int(lim["concurrency"]),
+                                     lease_ttl=max(60.0, float(lim["timeout_s"]) * 4))
+
+    def slot(self):
+        """One of the target's concurrency slots, as a context manager.
+
+        The shared limiter is the authority whenever it is attached, exactly as it is for rate and
+        budget - keeping two authorities apart is the whole point of the _shared field. Loopback
+        targets we launched ourselves keep the in-process semaphore.
+        """
+        if self._shared is not None:
+            return self._shared.lease()
+        return self._sem
+
+    def acquire_slot(self) -> str:
+        """Take a concurrency slot without a `with` block, for hook-driven callers (the proxy gate).
+
+        Returns "" when no shared limiter is attached: a loopback target we launched has no program
+        policy to honour, and the in-process semaphore cannot span the proxy's separate hooks.
+        """
+        return self._shared.acquire_lease() if self._shared is not None else ""
+
+    def release_slot(self, token: str) -> None:
+        if token and self._shared is not None:
+            self._shared.release_lease(token)
+
+    def acquire(self, method: str = "", url: str = "") -> float:
+        """Spend one token of rate and one unit of budget. Returns seconds waited.
+
+        The single place either is spent, so the shared and in-memory paths cannot drift. Budget
+        exhaustion surfaces as a ScopeViolation whichever path produced it, keeping ScopeViolation
+        the one exception callers need to handle.
+        """
+        if self._shared is not None:
+            try:
+                return self._shared.acquire()
+            except BudgetExhausted as e:
+                raise ScopeViolation(
+                    f"request budget exhausted ({e.sent}/{e.budget}); raise limits.max_requests only "
+                    f"if the program's policy allows it", method, url, "limits.max_requests") from e
+        return self._bucket.acquire()
 
     def lint(self) -> list[str]:
         """Advisory warnings about a scope file that parses but is weak. Never blocks."""
@@ -395,11 +522,48 @@ class _Transcript:
     a report cites in place of file:line for a black-box target, so they must be stable and the
     bodies must be hashed."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, shared: bool = False):
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._n = self._resume()
+        # `shared` is for processes that write CONCURRENTLY - the in-house primitives and an
+        # external tool's traffic arriving through the mitmproxy gate at the same moment.
+        # _resume() runs once at construction, which is enough for hunt.py's SEQUENTIAL
+        # subprocesses but not for two live writers: both would hold the same _n and mint
+        # duplicate ids. A duplicate T##### makes a report's evidence citation ambiguous, so in
+        # shared mode the id is allocated from the file itself, under a lock every writer respects.
+        self._shared = bool(shared)
+        self._flock = _FileLock(Path(str(path) + ".ids")) if shared else None
+        self._counter = Path(str(path) + ".ids")
+
+    def _counter_on_disk(self) -> int:
+        """Highest id handed out, including ids reserved but not yet written."""
+        try:
+            return int(json.loads(self._counter.read_text(encoding="utf-8"))["n"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return 0
+
+    def _last_id_on_disk(self) -> int:
+        """Highest id already written. Reads the tail rather than the whole file - an engagement's
+        transcript gets large and this runs once per request."""
+        try:
+            size = self.path.stat().st_size
+        except OSError:
+            return 0
+        if not size:
+            return 0
+        try:
+            with self.path.open("rb") as fh:
+                fh.seek(max(0, size - 8192))
+                tail = fh.read().decode("utf-8", "replace")
+        except OSError:
+            return 0
+        ids = re.findall(r'"id":\s*"T(\d+)"', tail)
+        # max(), NOT ids[-1]: records interleave. Process A reserves T00005, B reserves
+        # T00006, then A appends its real T00005 record last - so the final line in the file
+        # is T00005 and the next allocator would hand out T00006 a second time.
+        return max((int(i) for i in ids), default=self._n)
 
     def _resume(self) -> int:
         """Continue the id sequence across processes — hunt.py launches authz_diff/fuzz as
@@ -418,11 +582,29 @@ class _Transcript:
         return n
 
     def next_id(self) -> str:
+        if self._shared:
+            # The id is reserved in a sidecar counter, NOT by writing a placeholder line into the
+            # transcript. An early version did the latter, and it meant every request left two
+            # lines carrying the same T##### - which is precisely the ambiguity shared mode exists
+            # to remove, since `hunt evidence --transcript-ids` selects by id.
+            with self._flock:
+                n = max(self._n, self._counter_on_disk(), self._last_id_on_disk()) + 1
+                self._n = n
+                try:
+                    self._counter.write_text(json.dumps({"n": n}), encoding="utf-8")
+                except OSError:
+                    pass       # the tail scan below is the fallback authority
+                return f"T{n:05d}"
         with self._lock:
             self._n += 1
             return f"T{self._n:05d}"
 
     def write(self, rec: dict) -> None:
+        if self._shared:
+            with self._flock:
+                with self.path.open("a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            return
         with self._lock:
             with self.path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -469,11 +651,30 @@ class ScopedSession:
             import _common as C
             workdir = C.workdir(slug)
         self.workdir = Path(workdir)
-        self.transcript = _Transcript(self.workdir / "web" / "transcript.jsonl")
+        # A real scope file means a live target, which is where an external tool may be
+        # writing to this same transcript concurrently through the mitmproxy gate.
+        self.transcript = _Transcript(self.workdir / "web" / "transcript.jsonl",
+                                      shared=scope.path is not None)
         self._sess = _requests.Session()
         self._sess.headers.update({"User-Agent": scope.user_agent})
         # Policy-mandated attribution headers ride on the session so no primitive can omit one.
         self._sess.headers.update(scope.required_headers)
+
+        # Route through the recording proxy when the scope asks for one, so in-house traffic and
+        # external-tool traffic land in the same transcript in the same order.
+        prox = scope.proxy
+        if prox:
+            self._sess.proxies = {k: v for k, v in prox.items()
+                                  if k in ("http", "https") and v}
+            if "verify" in prox:
+                self._sess.verify = prox["verify"]
+
+        # One budget per target, shared with every other process testing it. Only for a real scope
+        # file — a loopback instance we launched has no program policy to honour, so it keeps the
+        # cheap in-memory counters rather than locking a file on every request.
+        if scope.path is not None:
+            scope.attach_shared(self.workdir / "web" / "limits.json")
+
         self.finding = ""          # set to an Fxxx id to tag the requests that prove it
 
     # ------------------------------------------------------------------------ api ---
@@ -517,9 +718,16 @@ class ScopedSession:
                                    "scope_digest": self.scope.digest()})
             raise ScopeViolation("safety.dry_run is set — no request sent", method, url, "safety.dry_run")
 
-        waited = self.scope._bucket.acquire()
+        try:
+            waited = self.scope.acquire(method, url)
+        except ScopeViolation as v:
+            self.transcript.write({
+                "id": tid, "ts": _now(), "refused": True, "identity": self.identity,
+                "primitive": self.primitive, "method": method, "url": url,
+                "reason": v.reason, "rule": v.rule, "scope_digest": self.scope.digest()})
+            raise
         started = time.monotonic()
-        with self.scope._sem:
+        with self.scope.slot():
             try:
                 resp = self._sess.request(method, url, allow_redirects=False, **kw)
             except _requests.RequestException as e:

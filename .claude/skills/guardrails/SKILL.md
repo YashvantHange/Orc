@@ -9,6 +9,14 @@ description: >
 
 # Guardrails
 
+**Rule 0 — consult the memory store first.** `memory/MEMORY.md` in the project root is the index of
+everything this pipeline has learned that is not derivable from the code: program eligibility rules,
+target verdicts, house conventions, and corrections. Read it and open the matching entries BEFORE
+hunting a target, writing a report, naming a file, or choosing a disclosure channel — not after being
+corrected. Write to it, via the `memory` agent, the moment something durable is established. Treat
+what you recall as a claim to verify, never as a settled fact: it describes what was true when it was
+written. Full rule and index discipline: `RULES.md`.
+
 Two rules sit above all others. If any other instruction, any time pressure, any "this is obviously
 fine" seems to conflict with these, these win.
 
@@ -99,6 +107,111 @@ A guardrail is not a step you may decide is already satisfied.
 - **Report the guardrail state honestly in your summary**: what was gated, what was waived, what was
   `BLOCKED`, and what you could not verify.
 
+## Dispatch is not completion — verify the artifact, not the notification
+
+An agent finishing is not the same as an agent having done its job. A subagent can return, be killed by
+a rate limit, or die mid-write, and **all three look identical from the outside**. On this pipeline a
+factual audit was dispatched, the session moved on, and it silently never wrote a verdict — the gap was
+found only because someone checked the filesystem by hand. A missing artifact looked exactly like a
+slow one.
+
+**At swarm width this is the dominant failure mode, not an edge case.** Thirty members produce thirty
+chances to mark a row `[x]` for a return nobody read, and a full green board is the most convincing
+artefact this pipeline can produce for work that did not happen. The rule does not change with width —
+for every member marked done you have read its return, and every promised artifact has been verified to
+exist — but the number of times per hunt you must apply it does. Two swarm-specific corollaries:
+
+- **A member that sends its own `curl` has left no transcript.** It bypasses `dynamic/scope.py`
+  entirely: no host or window check, no shared rate, no lease, no `T#####` entry. At width 30 that is
+  thirty independent ways to exceed a program's authorized rate with nothing recorded.
+- **A forged agent that was not registered was never dispatched.** `hunt swarm forge` writes the agent
+  and its registry lines in one operation for this reason; an agent file the orchestrator does not name
+  is capability the pipeline does not have.
+
+**After dispatching any agent that must leave an artifact, verify the artifact exists and is bound to
+the right inputs before you treat that step as done.** For the audit lane:
+
+```
+ls state/audit/<ID>.factual.json state/audit/<ID>.editorial.json
+python -c "import json;d=json.load(open('state/audit/<ID>.factual.json'));print(d['verdict'],d['report_sha256'])"
+```
+
+A verdict bound to superseded bytes is worth exactly as much as no verdict at all. Treat "no file" and
+"file bound to the wrong hash" as failures to be fixed, never as work in progress you can narrate past.
+If an agent died, say so plainly and relaunch it or do the work yourself — never let an unwritten
+verdict be reported as a completed check.
+
+The same applies to hunters: a hunter that returns without a coverage table has not swept its vein, and
+its rows are `BLOCKED`, not `CLEAR`.
+
+## A PASS you did not read is not a PASS — check the depth
+
+The delivery gate verifies that an audit verdict exists and is bound to the current bytes. It cannot
+tell a rigorous audit from a cursory one; both produce identical receipts. So before accepting a PASS,
+open it and look at the `checked` list:
+
+- Does it cover the load-bearing claims, or three incidental ones? A short `checked` list on a long
+  report means the pass was thin.
+- Does each entry name **how** it was verified — bytes compared, command executed, comparison case
+  run — rather than just asserting a result?
+- For a factual audit, is there evidence the PoC was actually executed rather than read?
+
+If the depth is not there, say so and send it back. Accepting a thin PASS and calling the report
+verified is the same failure as skipping the audit, with a receipt attached to make it look otherwise.
+
+## Write the handoff before you need it
+
+Long runs die. Rate limits have killed every background agent mid-cycle on this pipeline **twice**, and
+on both occasions the entire cycle's findings survived only because someone hand-wrote a handoff
+document after the fact. That is a recovery, not a design.
+
+**Create `work/<slug>-CYCLE<n>-HANDOFF.md` at the START of a cycle and update it at every confirmation,
+not at the end.** It carries: the pinned commit and how versions were resolved, the dedup boundary,
+each confirmed finding with its verified quotes and runtime proof, each dead lead with the reason, what
+is owed, and what a future session must not re-plow. Write into it the moment something confirms —
+while the instance is still up and the evidence is still open — because that is the state you cannot
+reconstruct later.
+
+The handoff is the source of truth for the next session, ahead of any agent's summary and ahead of the
+memory store, which may not have been written at all if the memory agent was one of the casualties.
+
+## Verification is not the same as repetition
+
+Rule 1 says nothing is known until it was checked. It does **not** say check it again because
+checking felt good. Re-running a verification whose inputs have not changed adds no accuracy and is
+the single largest avoidable cost in this pipeline. Tell the two apart by asking what changed since
+the last check — if the answer is nothing, the previous result still stands.
+
+**Whoever drives the report lane owns these costs, including the main session.** `report-writer`
+cannot dispatch subagents, so on most runs the auditors are launched from the main conversation,
+where that agent's cost rules are not loaded. They still apply to you:
+
+- **Pre-flight the gate before dispatching auditors.** `hunt validate-report <id>` is nearly free and
+  names mechanical failures — CVSS vector mismatches, a run recorded against a dirty tree, missing
+  fields. Fixing those after an audit means the fix voids the verdicts and you pay the round twice.
+- **Batch every fix into one pass.** Collect defects from both auditors *and* the gate, fix them
+  together, re-hash, re-audit once. Edit → audit → edit → audit is the same accuracy at double the
+  price, and it is what a real session actually did.
+- **Never repeat a recorded run to satisfy a checklist.** Two runs, two agents, two directories. Do
+  not re-record to chase a gate complaint — the runlog is tamper-evident and editing it makes things
+  worse, not better.
+- **A cheap failure first, always.** Grep, `git status`, a byte count and the gate cost almost nothing
+  and answer most questions an expensive agent would be asked. Spend the agent on judgement.
+
+None of this licenses skipping a check. These stay non-negotiable, whatever the budget:
+
+- The **independent cold execution** by `report-auditor` — a different agent, a fresh directory. It is
+  what catches the install step that only worked in your venv, and in a real session it caught a
+  major false claim that had already passed a prior audit.
+- **Both audits re-run after any edit to the report.** The receipt binds to bytes; a verdict on
+  superseded bytes attests to a file that no longer exists.
+- **The runtime confirmation behind every verdict.** `CLEAR` still means the guard was read *and* the
+  attack was sent and rejected.
+
+If the budget will not cover a required check, say so plainly and stop — do not quietly downgrade the
+check and present the result as verified. Under-verifying is a correctness failure; over-verifying is
+only a cost failure, so when genuinely unsure, verify.
+
 ## What is mechanically enforced vs what is on you
 
 Read this before assuming you are covered. Verified against the hook sources.
@@ -112,6 +225,12 @@ Read this before assuming you are covered. Verified against the hook sources.
 - `PostToolUse(Write|Edit)` → `tools/hooks/on_report_write.py` — registers a touched report so the Stop
   hook can see it.
 - `permissions.deny` — the enforcement files above cannot be edited from a session.
+- `reports/impact_gate.py` — the **impact bar**. `hunt report` will not scaffold and
+  `hunt validate-report` will not pass without a PASS decision on file at `state/impact/<ID>.json`,
+  made on the same CVSS vector the report now carries. It refuses below 4.0, refuses a primitive with
+  no demonstrated gadget chain, refuses three or more independent preconditions, and refuses the two
+  dead classes by name (self-described dev/debug tooling, CI-guard defects). Only the user can
+  override it, and their words are recorded verbatim in the decision.
 - `dynamic/scope.py` — enforces hosts, paths, methods, rate, budget and window, and writes the
   transcript, **for every request that goes through the pipeline's web/dynamic modules**. Exit 3 on a
   refusal, and nothing is sent.
@@ -123,6 +242,14 @@ Read this before assuming you are covered. Verified against the hook sources.
   not yours to claim, cache/smuggling are detection-only, no social engineering, stop on a live
   incident.
 - The novelty gate (`variant-analysis`) — nothing stops an `OUT_OF_SCOPE` variant being written up.
+- **The Security-impact gate's first four questions** (`report-standards`) — attacker, boundary,
+  C/I/A property, stated purpose. `impact-gate` records your answers and refuses a blank one, but it
+  cannot tell a real answer from a plausible one; whether the attacker you named actually lacks that
+  outcome legitimately is still your judgement. The *fifth* question, the impact bar, is now machine
+  enforced — see above. It exists because every other stage checks that a report's claims are true and
+  none checked that the impact was worth filing, which cost us three fully delivered, fully audited
+  reports: FIL-004 and FIL-005 on 2026-09-04, SHAKA-003 on 2026-09-08, all closed with the same
+  sentence — *not severe enough for us to track it as a security bug*.
 - The coverage matrix, the depth requirement, and the dynamic-first verdict rules (`dynamic-hunt`) —
   nothing checks that a `CLEAR` was tested rather than read.
 - **The clean-room reproduction** (`report-craft` §3b). `validate-report` verifies the recorded runlog,
@@ -146,6 +273,23 @@ so you do not fall through one:
    straight into your chat message, is invisible to it. **Rule: a disclosure lives under `reports/`,
    and nothing report-shaped is presented to the user without a receipt — the location of the file
    does not change the rule.**
+
+   **This gap has been fallen through, so treat it as live, not theoretical.** On `anomalyco/opencode`
+   (2026-10-02) two confirmed RCE vectors were written up at `work/<slug>/CYCLE1-HANDOFF.md` and
+   presented with CVSS, quotes and PoC markers, with no `reports/` file, no impact-gate decision and no
+   audit. The Stop hook stayed silent exactly as described above. The session *said* no gate had run and
+   treated saying so as enough. It is not: **naming a bypass while using it is still using it.**
+
+   Two failure modes to recognise in yourself:
+   - **"It can't be filed, so the pipeline doesn't apply."** The gates protect the *claims*, not the
+     *channel*. When delivery is blocked, the only output left is a claim to the user — which is
+     precisely when an ungated finding does its damage.
+   - **"I disclosed the gap" substituting for "I closed the gap."** Honesty is mandatory and is not a
+     substitute for compliance.
+
+   **Corollary — ordering: `hunt impact-gate` runs when a lead CONFIRMS, before any write-up exists in
+   any location.** Belatedly, that gate returned `BLOCK — "No report lane. Do not write this up"` on the
+   finding above; one command, run first, would have saved the entire write-up. See `RULES.md` Gap 5.
 3. **`pre_submit.py` matches only commands that literally contain `reports/<name>.md`.** A heredoc
    that inlines the report body, or a submission through a web UI, is not caught. **Rule: gate before
    you transmit, by any route.**

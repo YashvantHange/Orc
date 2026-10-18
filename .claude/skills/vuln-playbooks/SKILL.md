@@ -75,41 +75,54 @@ Playbook § names without a prefix are in this file; `web:` means the `web-playb
 | Missing rate limit / anti-automation | web: Rate limiting | both | authn-crypto |
 | Race conditions (multi-user) | Race condition / TOCTOU | both | authz-logic |
 | Business logic & workflow abuse | web: Business logic | both | authz-logic |
+| Unguarded API route group behind an SPA | `api-inventory` Play 2 | url | authz-logic |
 
 ### B. Injection & execution
 | Class | Playbook § | Kind | Owner |
 |-------|-----------|------|-------|
-| Command injection | Code / expression / command injection | both | injection |
-| Code / expression injection | Code / expression / command injection | both | injection |
-| Unsafe deserialization | Unsafe deserialization | both | injection |
-| Template injection (SSTI) | Template injection | both | injection |
+| Command injection | Code / expression / command injection | both | rce-exec |
+| Argument injection on a shell-free argv call | Code / expression / command injection | both | rce-exec |
+| Env-var injection into a child process | Code / expression / command injection | both | rce-exec |
+| Code / expression injection | Code / expression / command injection | both | rce-exec |
+| Unsafe deserialization | Unsafe deserialization | both | rce-exec |
+| Untrusted model / checkpoint / dataset load | Unsafe deserialization | both | rce-exec |
+| Loader-by-name (registry, plugin, `_target_`) | Unsafe deserialization | both | rce-exec |
+| Template injection (SSTI) | Template injection | both | rce-exec |
 | Client-side template injection (CSTI) | web: CSTI | url | client-side |
-| SQL injection | SQL / NoSQL / Cypher injection | both | injection |
-| NoSQL / Cypher injection | SQL / NoSQL / Cypher injection | both | injection |
-| LDAP / XPath / expression-language injection | SQL / NoSQL / Cypher injection | both | injection |
-| Second-order injection | web: Second-order injection | both | injection |
-| XXE | XXE | both | injection |
-| Prototype pollution (server) | web: Prototype pollution | both | injection |
+| SQL injection | SQL / NoSQL / Cypher injection | both | datastore |
+| SQL identifier / ORDER BY injection | SQL / NoSQL / Cypher injection | both | datastore |
+| NoSQL / Cypher injection | SQL / NoSQL / Cypher injection | both | datastore |
+| ORM filter / escape-hatch injection | SQL / NoSQL / Cypher injection | both | datastore |
+| Search / vector-store filter injection | SQL / NoSQL / Cypher injection | both | datastore |
+| LDAP / XPath injection | SQL / NoSQL / Cypher injection | both | datastore |
+| Expression-language injection (SpEL/OGNL/MVEL) | Code / expression / command injection | both | rce-exec |
+| Second-order injection | web: Second-order injection | both | datastore |
+| XXE | XXE | both | server-side |
+| Prototype pollution (server) | web: Prototype pollution | both | server-side |
 
 ### C. Untrusted fetch & files
 | Class | Playbook § | Kind | Owner |
 |-------|-----------|------|-------|
-| SSRF (incl. guard bypass) | SSRF | both | injection |
-| SSRF via renderers (PDF/screenshot/webhook) | web: SSRF via renderers | both | injection |
-| DNS rebinding against an allowlist | Allowlist DNS-rebinding | both | injection |
-| Path traversal / LFI → file READ | Path traversal / LFI | both | injection |
-| Arbitrary file WRITE | Arbitrary file WRITE | both | injection |
-| File upload validation bypass | File upload validation bypass | both | injection |
-| Open redirect | Open redirect | both | injection |
+| SSRF (incl. guard bypass) | SSRF | both | server-side |
+| SSRF via renderers (PDF/screenshot/webhook) | web: SSRF via renderers | both | server-side |
+| DNS rebinding against an allowlist | Allowlist DNS-rebinding | both | server-side |
+| Path traversal / LFI → file READ | Path traversal / LFI | both | server-side |
+| Arbitrary file WRITE | Arbitrary file WRITE | both | server-side |
+| Write-then-execute chain (write reaches an executed path) | Arbitrary file WRITE | both | rce-exec |
+| File upload validation bypass | File upload validation bypass | both | server-side |
+| Uploaded `.svg`/`.html` served inline from the app origin | File upload validation bypass · XSS | both | xss |
+| Open redirect | Open redirect | both | server-side |
 | Signed-URL / presigned-upload abuse | web: Signed-URL abuse | both | authz-logic |
-| Decompression bomb / resource exhaustion | ReDoS & weak crypto | both | injection |
+| Decompression bomb / expansion bomb | ReDoS & weak crypto | both | resource-dos |
+| Unbounded allocation from a declared size/count | ReDoS & weak crypto | both | resource-dos |
 
 ### D. Client-side
 | Class | Playbook § | Kind | Owner |
 |-------|-----------|------|-------|
-| Reflected XSS | XSS | both | injection |
-| Stored XSS | XSS | both | injection |
-| DOM XSS | XSS · web: DOM XSS | both | client-side |
+| Reflected XSS | XSS | both | xss |
+| Stored XSS | XSS | both | xss |
+| Sanitizer bypass / mXSS | XSS | both | xss |
+| DOM XSS | XSS · web: DOM XSS | both | xss |
 | Prototype pollution (client) | web: Prototype pollution | url | client-side |
 | CSRF | web: CSRF | both | client-side |
 | Clickjacking / UI redress | web: Clickjacking | url | client-side |
@@ -125,21 +138,29 @@ Playbook § names without a prefix are in this file; `web:` means the `web-playb
 |-------|-----------|------|-------|
 | GraphQL (introspection, batching, depth, field authz) | web: GraphQL | both | authz-logic |
 | WebSocket auth & origin | web: WebSocket | both | authz-logic |
-| Host-header injection | web: Host-header injection | url | injection |
-| Web cache poisoning | web: Cache poisoning | url | injection |
-| Web cache deception | web: Cache deception | url | injection |
-| Request smuggling (detection only) | web: Request smuggling | url | injection |
+| Host-header injection | web: Host-header injection | url | server-side |
+| Response splitting (CRLF into a header) | web: Host-header injection | url | server-side |
+| Web cache poisoning | web: Cache poisoning | url | server-side |
+| Web cache deception | web: Cache deception | url | server-side |
+| Request smuggling (detection only) | web: Request smuggling | url | server-side |
 | MCP-surface auth | MCP-surface auth | both | authz-logic |
+| Shadow / zombie API versions | `api-inventory` Play 1 | url | authz-logic |
 
 ### F. Infrastructure & config
 | Class | Playbook § | Kind | Owner |
 |-------|-----------|------|-------|
 | Secrets exposure through APIs | Secrets exposure through APIs | both | authn-crypto |
 | Info disclosure / secrets in logs & errors | Info disclosure | both | authn-crypto |
+| Verbose error / fail-open on malformed input | Info disclosure | both | authn-crypto |
+| Stack-specific surface (framework/platform) | `stack-playbooks` | both | (per row hit) |
 | Security-header posture | web: Header posture | url | web-recon |
 | Subdomain takeover (detection only) | web: Subdomain takeover | url | authn-crypto |
 | Weak crypto / weak randomness | ReDoS & weak crypto | both | authn-crypto |
-| ReDoS | ReDoS & weak crypto | both | injection |
+| ReDoS | ReDoS & weak crypto | both | resource-dos |
+| Quadratic / exponential algorithm on request input | ReDoS & weak crypto | both | resource-dos |
+| Sync CPU work blocking an async event loop | ReDoS & weak crypto | both | resource-dos |
+| Unbounded recursion / stored cycle (never terminates) | ReDoS & weak crypto | both | resource-dos |
+| OOB index / length math into native or GPU code | ReDoS & weak crypto | src | resource-dos |
 | Vulnerable & outdated components | (dep-audit; `hunt scan`) | src | injection |
 
 ### G. AI / LLM-native
@@ -150,6 +171,12 @@ Playbook § names without a prefix are in this file; `web:` means the `web-playb
 | Excessive agency / unbounded tool scope | AI/LLM-native | both | authz-logic |
 | Secrets leaking into LLM execution data | Secrets exposure through APIs | both | authn-crypto |
 | Model / training-data supply chain | AI/LLM-native | src | injection |
+| Vector & embedding weaknesses (RAG store) | Vector & embedding weaknesses | both | authz-logic |
+
+Two sweeps, not one. The rows above are class-first. Once the stack is fingerprinted, run the
+stack-first sweep in `stack-playbooks` as well — a class sweep does not think to ask for
+`/actuator/heapdump` or `/_next/image`, and a stack sweep does not find the business logic. Fold every
+stack hit back into the row it belongs to.
 
 Shared surfaces — audit them together, not one row at a time. The file plane (traversal + write +
 upload) is one question asked three ways: *who names the path, who names the bytes, who names the type*.
@@ -468,6 +495,17 @@ class in AI tooling, because every one of these products stores third-party LLM/
 ## Info disclosure / secrets-in-logs (AI-native)
 - Raw exception/stack to client → CWE-209 (`error_disclosure` probe).
 - Credential values flowing into LLM prompts / execution data / logs → CWE-532 (trace source→sink).
+- **Make it fail, don't wait for it to fail.** Take a known-good request and break exactly one assumption
+  at a time: a field the code expects to be a number sent as an array or object, truncated or invalid
+  JSON, a missing/wrong `Content-Type`, a very long string, a negative or overflowing number, an embedded
+  null byte. Watch the response **body**, not the status — a 200 or 400 carrying a stack trace is the
+  same finding as a 500 carrying one.
+- The signal is a framework error-disclosure signature: a language traceback, ORM internals and query
+  text, absolute server paths, or library versions. A clean `{"error":"Invalid input"}` is correct
+  handling and is **not** a finding.
+- Capture the leaked artifact itself — the path, ORM class, or stack frame. "It returned 500" is not
+  disclosure. Then say what the leak arms next (a disclosed SQL error → SQLi; an absolute path → traversal),
+  because on its own this class often fails the Security-impact gate as a hardening note.
 
 ## MCP-surface auth (newest, least-audited vein)
 - Source: an MCP endpoint/server config: `auth_type`/`authType`, an install/tool-list route, a
@@ -547,6 +585,38 @@ rather than "the requesting end-user's", every prompt injection is an authorizat
 - **Sensitive-data leak via the model (LLM06 legacy).** Credentials / other users' data flowing into a
   prompt, an execution log, or the completion returned to a different user (the LightRAG execution-data
   class). Trace source→prompt/log/response. CWE-200/532.
+
+## Vector & embedding weaknesses (RAG store)  (OWASP LLM08)
+The class above owns *session-scoped* injection — a hidden instruction that fires when that document is
+summarized. This one owns the **storage and retrieval layer itself**, where the bug needs no prompt payload
+at all. Directly relevant to every vector-DB and RAG target this pipeline hunts.
+- **Surface signals.** A reachable vector-DB port (Chroma 8000, Weaviate 8080, Qdrant 6333, Milvus 19530,
+  pgvector via an exposed Postgres, an OpenSearch kNN mapping); an "upload documents, then ask questions"
+  feature shared across users or tenants; a response block listing "sources" or "similar documents"; a
+  debug or analytics route returning raw vectors.
+- **Cross-tenant vector-store IDOR (the highest-yield shape).** Isolation is usually enforced in the
+  application layer — the chat API checks `tenant_id` before calling the store — and not in the store,
+  which is the layer that matters. Probe the DB directly unauthenticated; and probe the app's own API for
+  a client-controlled `namespace` / `tenant_id` / document-id parameter. **Proof bar:** the returned
+  content must carry a value you can independently verify belongs to a different real tenant, checked
+  against a same-account control query. "Different-looking content" is not proof.
+- **Source-text / metadata leakage.** RAG implementations almost universally store the original chunk text
+  as metadata beside the vector, so any "sources used", `/similar`, or `/embeddings/query` route exposes it
+  — and those routes are frequently unauthenticated leftovers. Do **not** write this up as "embedding
+  inversion": inversion means recovering text from the numeric vector with a trained decoder, it has a
+  different remediation, and claiming it without a working decoder is an over-claim a reviewer will catch.
+- **Persistent corpus poisoning.** Ingest a document whose visible text is dense with the topic's common
+  query vocabulary and whose hidden portion carries an instruction. **Proof bar:** a *second, clean*
+  session or account must retrieve it via a plain question that does not name your document. If it only
+  reproduces when you re-ask about your own upload, it is the session-scoped class above, not this one.
+  Test at least three differently-worded queries before claiming it retrieves broadly.
+- **Retrieval hijack** (out-competing genuine documents in top-k) is a lever, not a standalone finding —
+  score it by what the model then does with the hijacked context, and see `chain-craft`.
+- Severity anchors: unauthenticated store exposing the full corpus = Critical; verified cross-tenant
+  retrieval = High–Critical; poisoning proven into a clean session = High–Critical; own-tenant source-text
+  leak = Low–Medium; hijack with no chained impact = Medium at best.
+- CWE-862/639 (cross-tenant retrieval), CWE-200 (source-text leak), CWE-1427 (the injection carried by a
+  poisoned chunk).
 
 ## Race condition / TOCTOU in multi-user environments  (dynamic-only)
 - Source: two operations that must be atomic but aren't — a check-then-act, a "make safe then connect"

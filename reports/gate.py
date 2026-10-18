@@ -117,6 +117,79 @@ def check_poc_executed(ctx: dict) -> tuple[bool, str]:
     return True, f"{n} recorded run(s), hashes consistent, tree clean"
 
 
+# --- Gap 1 (RULES.md) ---------------------------------------------------------------------------
+# Every other check here verifies that a claim in the report is TRUE. None verified that output the
+# report QUOTES came from a recorded execution. A PoC can grow a case while the runlog still holds
+# the previous run, and the report then quotes lines its own script never produced. That happened on
+# a delivered-ready report and was caught by hand, one step before the auditors.
+
+# Lines inside a fence that are prose, headings or diff/code rather than captured output. A quoted
+# fence is only checked when it looks like program output, so a report may still show a proposed
+# patch or an XML snippet without the gate demanding it appear in a runlog.
+_OUTPUT_HINT = re.compile(r"^\s*(?:\[|\$|>|#\s|PASS|FAIL|OK\b|ok\s|GET |POST |HTTP/|Traceback|\w+:\s)")
+
+
+def _fenced_blocks(md: str) -> list[tuple[str, str]]:
+    """Return (info_string, body) for every fenced block in the report."""
+    out = []
+    for m in re.finditer(r"^```([^\n]*)\n(.*?)^```", md, re.S | re.M):
+        out.append((m.group(1).strip().lower(), m.group(2)))
+    return out
+
+
+def _looks_like_output(info: str, body: str) -> bool:
+    # An explicitly language-tagged fence is source, not captured output.
+    if info in {"js", "ts", "py", "python", "java", "go", "rust", "c", "cpp", "xml", "html",
+                "json", "yaml", "yml", "diff", "patch", "sql"}:
+        return False
+    lines = [l for l in body.split("\n") if l.strip()]
+    if not lines:
+        return False
+    return sum(bool(_OUTPUT_HINT.match(l)) for l in lines) >= max(2, len(lines) // 2)
+
+
+def check_quoted_output(ctx: dict) -> tuple[bool, str]:
+    """Output quoted in the report must appear in a recorded run.
+
+    Guards against a report that quotes a stale runlog, a hand-edited transcript, or output from a
+    PoC revision that was never re-run.
+    """
+    doc = ctx.get("runlog")
+    if not doc:
+        return False, "no runlog loaded; the PoC-executed check must pass first"
+
+    recorded = "\n".join(
+        (r.get("stdout") or "") + "\n" + (r.get("stderr") or "")
+        for r in doc.get("runs", [])
+    )
+    if not recorded.strip():
+        return False, "the recorded runs captured no output to compare the report against"
+
+    checked = missing = 0
+    first_missing = []
+    for info, body in _fenced_blocks(ctx["report_txt"]):
+        if not _looks_like_output(info, body):
+            continue
+        for line in (l.rstrip() for l in body.split("\n")):
+            if not line.strip():
+                continue
+            checked += 1
+            if line.strip() not in recorded:
+                missing += 1
+                if len(first_missing) < 3:
+                    first_missing.append(line.strip()[:90])
+
+    if not checked:
+        return True, "no captured-output blocks quoted in the report"
+    if missing:
+        return False, (
+            f"{missing} of {checked} quoted output line(s) do not appear in any recorded run - "
+            f"re-run the PoC so the report quotes a real execution. First: "
+            + " | ".join(first_missing)
+        )
+    return True, f"{checked} quoted output line(s) all present in the recorded runs"
+
+
 def _check_audit(ctx: dict, which: str, agent: str) -> tuple[bool, str]:
     """The audit must exist, PASS, show its work, and be bound to the CURRENT report bytes."""
     p = audit_path(ctx["finding_id"], which)
@@ -180,6 +253,19 @@ def check_duplicate(ctx: dict) -> tuple[bool, str]:
     return True, f"verdict={d.get('verdict', '?')}, {age:.1f}d old"
 
 
+def check_impact_bar(ctx: dict) -> tuple[bool, str]:
+    """Is there a recorded decision that this finding clears the destination program's bar?
+
+    This is the one check here that is about the finding rather than the paperwork, and it is still
+    a filesystem fact: impact_gate.py made the judgement and wrote it down; this asks whether it did,
+    and whether it was made on the vector the report now carries. Added after three fully-proven,
+    fully-audited reports came back "not severe enough for us to track it as a security bug" -
+    FIL-004, FIL-005, SHAKA-003. Every other check in this file would have passed all three.
+    """
+    import impact_gate
+    return impact_gate.cleared(ctx["finding_id"], ctx["rec"].get("cvss") or "")
+
+
 def check_cvss(ctx: dict) -> tuple[bool, str]:
     """Arithmetic, not judgement: the vector must parse and its score must match what's printed.
 
@@ -232,7 +318,9 @@ def check_scope_auth(ctx: dict) -> tuple[bool, str]:
 
 CHECKS_COMMON = [
     ("Report exists", check_report_exists),
+    ("Impact bar", check_impact_bar),
     ("PoC executed", check_poc_executed),
+    ("Quoted output", check_quoted_output),
     ("Factual audit", check_factual_audit),
     ("Editorial audit", check_editorial_audit),
     ("Duplicate check", check_duplicate),

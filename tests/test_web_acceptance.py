@@ -35,6 +35,13 @@ SCOPE = FIXTURE / "scope.yml"
 PORT = int(os.environ.get("WEB_ACCEPTANCE_PORT", "8031"))
 BASE = f"http://127.0.0.1:{PORT}"
 
+# The full sweep against a fixture that exercises every class is slow, and most of it is not HTTP:
+# measured at ~13.6k requests (328s on the wire) plus a browser launch for each of the six
+# client-side classes. The old 900s was set when this fixture did not exist, and with one in place
+# it killed the probe mid-run and reported the result as a detection failure - a stopwatch, not a
+# finding. Override with WEB_ACCEPTANCE_PROBE_TIMEOUT when running on slower hardware.
+PROBE_TIMEOUT = int(os.environ.get("WEB_ACCEPTANCE_PROBE_TIMEOUT", "2400"))
+
 # Seeded classes the sweep is expected to catch. Kept deliberately short of the full HIT list so a
 # harmless heuristic change doesn't fail the build — these are the ones that must never regress.
 MUST_FIND = {
@@ -69,6 +76,21 @@ def _python_with_flask() -> str | None:
     return None
 
 
+def _port_holder(port: int) -> str:
+    """Who already owns the port? Without this, a stale fixture and a broken one look identical."""
+    try:
+        out = subprocess.run(["netstat", "-ano"], capture_output=True, text=True,
+                             timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return "(could not inspect the port)"
+    pids = {line.split()[-1] for line in out.splitlines()
+            if f":{port} " in line and "LISTEN" in line.upper()}
+    if not pids:
+        return "Nothing is listening there, so the fixture itself failed to start."
+    return (f"PID(s) {', '.join(sorted(pids))} are already listening - most likely a fixture left "
+            f"over from an earlier run. Kill them and retry.")
+
+
 def _wait_up(timeout: float = 25.0) -> bool:
     end = time.time() + timeout
     while time.time() < end:
@@ -100,7 +122,9 @@ def run_acceptance() -> dict:
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         if not _wait_up():
-            raise RuntimeError("fixture did not come up")
+            raise RuntimeError(f"fixture did not come up on port {PORT}. "
+                               f"{_port_holder(PORT)} "
+                               f"Set WEB_ACCEPTANCE_PORT to use a different port.")
         owner, other = _login("alice", "alice-pw"), _login("bob", "bob-pw")
         hunt = [sys.executable, str(ROOT / "hunt.py")]
         slug = f"_acceptance_{PORT}"
@@ -115,7 +139,7 @@ def run_acceptance() -> dict:
                                "--opt", "emails=probe@example.invalid",
                                "--opt", "username=alice", "--opt", "password=alice-pw",
                                "--opt", "login=/api/login", "--opt", "victim_id=1", "--fast"],
-                       cwd=ROOT, env=env, capture_output=True, timeout=900)
+                       cwd=ROOT, env=env, capture_output=True, timeout=PROBE_TIMEOUT)
 
         import _common as C
         sweep = C.workdir(BASE) / "web" / "sweep.json"
@@ -134,8 +158,21 @@ _CACHE: dict = {}
 
 
 def _sweep() -> dict:
+    """Run the acceptance sweep once per session - including when it FAILS.
+
+    Caching only success meant a single failure was retried by every test in this file, and each
+    retry launched another Flask app. Six relaunches against an already-occupied port leave six
+    orphans, which then look like concurrent test runs. The failure is cached and re-raised so the
+    first real error is the one every test reports.
+    """
+    if "err" in _CACHE:
+        raise _CACHE["err"]
     if "d" not in _CACHE:
-        _CACHE["d"] = run_acceptance()
+        try:
+            _CACHE["d"] = run_acceptance()
+        except BaseException as e:        # noqa: BLE001 - re-raised below, never swallowed
+            _CACHE["err"] = e
+            raise
     return _CACHE["d"]
 
 

@@ -43,6 +43,7 @@ ROOT = Path(__file__).resolve().parent
 for sub in ("static", "dynamic", "intel", "reports", "evidence", "web", "tools"):
     sys.path.insert(0, str(ROOT / sub))
 import board as B                                                            # noqa: E402
+import swarm as SW                                                           # noqa: E402
 PY = sys.executable
 PROFILE_SCHEMA = 2          # 2 adds target-kind + live-website recon keys
 
@@ -256,6 +257,26 @@ def cmd_sweep(a) -> int:
     return 0
 
 
+# ------------------------------------------------------------------------- payload ----
+def cmd_payload(a) -> int:
+    """Build a benign payload set (generation only — nothing is sent). See payload-forge."""
+    sys.path.insert(0, str(ROOT / "dynamic"))
+    import payloads as _payloads
+    argv: list[str] = []
+    if a.list:
+        argv.append("--list")
+    if a.cls:
+        argv += ["--class", a.cls]
+    for d in a.dialect:
+        argv += ["--dialect", d]
+    argv += ["--encodings", a.encodings, "--marker", a.marker, "--port", str(a.port)]
+    if a.json:
+        argv.append("--json")
+    if a.out:
+        argv += ["--out", a.out]
+    return _payloads.main(argv)
+
+
 # --------------------------------------------------------------------------- probe ----
 def cmd_probe(a) -> int:
     env = None
@@ -270,6 +291,129 @@ def cmd_probe(a) -> int:
     if a.secret:
         cmd += ["--secret", a.secret]
     return _run(cmd, env=env)
+
+
+# -------------------------------------------------------------------------- chains ----
+def cmd_chain(a) -> int:
+    """Render work/<slug>/chains.json and refuse any chain with an unevidenced link.
+
+    The gate is the point. `sec-orchestrator` was already told to assemble chains - "no single
+    hunter sees both ends" - but with no artifact and no check, and severity inflation is the
+    failure mode of chain reporting. A refusal here does NOT reject the findings; each link can
+    still be reported alone. It refuses the composition, which is the part carrying the inflation.
+    """
+    sys.path.insert(0, str(ROOT / "correlate"))
+    import chains as CH
+    import _common as C
+
+    path = Path(a.path) if a.path else (C.workdir(a.target) / "chains.json")
+    try:
+        found = CH.load(path)
+    except CH.ChainError as e:
+        print(f"chains.json rejected: {e}", file=sys.stderr)
+        return 2
+    if not found:
+        print(f"no chains recorded at {path}")
+        return 1
+
+    refused = 0
+    for chain in found:
+        ok, reasons = CH.gate(chain)
+        print()
+        print(chain.render())
+        if ok:
+            print("  gate: PASS - reportable as a chain")
+        else:
+            refused += 1
+            print("  gate: REFUSED as a chain")
+            for r in reasons:
+                print(f"    - {r}")
+            print("    each link may still be reported on its own merits")
+
+    print(f"\n{len(found) - refused}/{len(found)} chains passed the gate")
+    return 1 if refused else 0
+
+
+# ---------------------------------------------------------------------- ext tools ----
+def cmd_ext(a) -> int:
+    """Run an external security tool inside the scope guard.
+
+    There is no `--` passthrough on purpose. Options arrive as `--opt k=v` and are validated against
+    a per-tool allowlist, because a passthrough would make this "run arbitrary offensive software
+    through my proxy" and would let a caller re-specify a flag the wrapper already computed.
+    """
+    sys.path.insert(0, str(ROOT / "dynamic"))
+    import exttool as X
+    import scope as S
+
+    if a.check:
+        for name, cmd in sorted(X.available().items()):
+            print(f"  {name:12} {'OK ' + ' '.join(cmd) if cmd else 'MISSING'}")
+        gate = X.resolve_command("mitmdump")
+        print(f"  {'mitmdump':12} "
+              f"{'OK ' + ' '.join(gate) if gate else 'MISSING — no external tool can be run'}")
+        return 0
+
+    if not a.tool:
+        print("usage: hunt ext <tool> --target <url> --scope <f> [--opt k=v ...]", file=sys.stderr)
+        return 2
+
+    if a.explain:
+        print(X.explain(a.tool))
+        return 0
+
+    if not a.target or not a.scope:
+        print("hunt ext needs --target and --scope", file=sys.stderr)
+        return 2
+
+    opts = {}
+    for kv in (a.opt or []):
+        if "=" not in kv:
+            print(f"--opt expects k=v, got {kv!r}", file=sys.stderr)
+            return 2
+        k, v = kv.split("=", 1)
+        opts[k] = v
+
+    spec = _resolve_target(url=a.target, scope_path=a.scope)
+    tspec = X.TargetSpec(url=a.target, method=a.method, parameter=a.param or "")
+    try:
+        rec = X.run(a.tool, tspec, scope_file=a.scope, slug=spec.key or spec.slug, opts=opts)
+    except S.ScopeViolation as v:
+        print(f"scope refused this target, nothing was run: {v}", file=sys.stderr)
+        return S.EXIT_SCOPE_REFUSAL
+    except X.ToolError as e:
+        print(f"{e}", file=sys.stderr)
+        return 2
+
+    print(f"{rec['tool']}: exit {rec['exit']} · {rec['requests']} requests · "
+          f"{rec['duration_s']}s · output {rec['stdout_path']}")
+    if rec["transcript_ids"]:
+        print(f"  transcript {rec['transcript_ids'][0]}..{rec['transcript_ids'][1]} "
+              f"— cite these, not the tool's own claim")
+    else:
+        print("  no requests reached the wire — check the scope and the gate before trusting this")
+    return 0 if rec["exit"] == 0 else 1
+
+
+def cmd_proxy(a) -> int:
+    """Long-lived recorder: point a browser, Burp or a tool at it and every request is transcribed."""
+    sys.path.insert(0, str(ROOT / "dynamic"))
+    import exttool as X
+    spec = _resolve_target(url=a.url, scope_path=a.scope) if a.url else None
+    mitmdump = X.resolve_binary("mitmdump")
+    if not mitmdump:
+        print("mitmdump is not installed (tools/install_tools.py --with-offensive)", file=sys.stderr)
+        return 2
+    slug = a.slug or (spec.key or spec.slug if spec else "ext")
+    import _common as C
+    env = {**os.environ, "HUNT_SCOPE_FILE": a.scope, "HUNT_SLUG": slug,
+           "HUNT_EXT_TOOL": "proxy", "HUNT_WORKDIR": str(C.workdir(slug)),
+           "PYTHONPATH": os.pathsep.join([str(ROOT / "dynamic"), str(ROOT / "static")]),
+           "PYTHONUTF8": "1"}
+    print(f"scope gate listening on 127.0.0.1:{a.port} — transcript "
+          f"{C.workdir(slug) / 'web' / 'transcript.jsonl'}")
+    return _run([str(mitmdump), "--listen-host", "127.0.0.1", "-p", str(a.port),
+                 "-s", str(ROOT / "dynamic" / "mitm_gate.py")], env=env)
 
 
 # --------------------------------------------------------------------------- web ----
@@ -823,11 +967,36 @@ LAYOUTS = {
 }
 
 
+def cmd_impact_gate(a) -> int:
+    """The impact-bar gate — does this finding clear the destination program's bar at all?
+
+    Thin caller; every question lives in reports/impact_gate.py. It exists because the rest of the
+    pipeline only ever verified that a report's claims were TRUE, never that the impact was worth
+    filing — three fully-proven reports were closed 'not severe enough' before this was a gate.
+    """
+    sys.path.insert(0, str(ROOT / "reports"))
+    import impact_gate
+    return impact_gate.main(a.rest)
+
+
 def cmd_report(a) -> int:
     rec = next((f for f in _ledger() if f.get("finding_id") == a.id), None)
     if not rec:
         print(f"error: {a.id} not in ledger; add it first (hunt ledger add)", file=sys.stderr)
         return 2
+
+    # The impact bar comes before the scaffold. A report lane is the most expensive thing this
+    # pipeline spends, and it must not be opened on a finding the destination program will close as
+    # not worth tracking. See reports/impact_gate.py for the three closures that made this a gate.
+    sys.path.insert(0, str(ROOT / "reports"))
+    import impact_gate
+    ok, why = impact_gate.cleared(a.id, rec.get("cvss") or "")
+    if not ok:
+        print(f"error: {why}", file=sys.stderr)
+        print(f"       hunt impact-gate {a.id} --program <dest> --vector '<CVSS>' --attacker ... "
+              f"--boundary ... --impact ... --marginal-gain ... --gadget ...", file=sys.stderr)
+        return 2
+    print(f"impact bar: {why}")
     layout = getattr(a, "layout", "github")
     tmpl_name = LAYOUTS.get(layout)
     if not tmpl_name:
@@ -899,8 +1068,40 @@ def cmd_board(a) -> int:
     return a.board_fn(a)
 
 
+def cmd_swarm(a) -> int:
+    try:
+        return a.swarm_fn(a)
+    except SW.SwarmError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 2
+    except Exception as e:                                                      # noqa: BLE001
+        if type(e).__name__ == "QueueError":
+            print(f"refused: {e}", file=sys.stderr)
+            return 2
+        raise
+
+
 # ---------------------------------------------------------------------------- main ----
+def _force_utf8_output() -> None:
+    """Never let an em-dash kill a command.
+
+    Windows consoles default to cp1252, and `hunt agents` died with UnicodeEncodeError because an
+    agent description contains an arrow. The `env` skill tells callers to set PYTHONUTF8=1, but that
+    is advice for arguments - a command that cannot print its own content is a bug, not a quirk, and
+    it fails at the END of the work, after everything useful has already been done.
+
+    errors="replace" rather than "strict": a mangled glyph in a roster listing is a cosmetic loss,
+    while an exception at print time throws away the whole run.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass        # not a real stream (pipe, captured buffer) - nothing to reconfigure
+
+
 def main() -> int:
+    _force_utf8_output()
     ap = argparse.ArgumentParser(prog="hunt", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -930,6 +1131,45 @@ def main() -> int:
     p.add_argument("--param"); p.add_argument("--secret")
     p.add_argument("--scope", help="scope.yml — required for a non-loopback --url")
     p.set_defaults(fn=cmd_probe)
+
+    p = sub.add_parser("chain", help="compose findings into attack paths, and gate them")
+    p.add_argument("target", nargs="?", default="", help="slug or target the chains belong to")
+    p.add_argument("--path", help="chains.json (default: work/<slug>/chains.json)")
+    p.set_defaults(fn=cmd_chain)
+
+    p = sub.add_parser("ext", help="run an external tool (sqlmap/ffuf/nuclei/...) inside the scope guard")
+    p.add_argument("tool", nargs="?", help="omit with --check to list what is installed")
+    p.add_argument("--target", help="the URL the tool is pointed at")
+    p.add_argument("--scope", help="scope.yml — required, there is no flag that skips it")
+    p.add_argument("--method", default="GET")
+    p.add_argument("--param", help="the parameter under test, where the tool takes one")
+    p.add_argument("--opt", action="append", default=[],
+                   help="k=v, repeatable; validated against the tool's allowlist")
+    p.add_argument("--check", action="store_true", help="which tools are installed")
+    p.add_argument("--explain", action="store_true",
+                   help="print the forced/allowed/refused arguments without running anything")
+    p.set_defaults(fn=cmd_ext)
+
+    p = sub.add_parser("proxy", help="long-lived scope-enforcing recorder (Burp/ZAP/browser upstream)")
+    p.add_argument("--url", help="origin, used to pick the workdir")
+    p.add_argument("--scope", required=True)
+    p.add_argument("--slug")
+    p.add_argument("--port", type=int, default=8081)
+    p.set_defaults(fn=cmd_proxy)
+
+    p = sub.add_parser("payload", help="build a benign payload set (generation only; sends nothing)")
+    p.add_argument("--class", dest="cls", help="vulnerability class (omit or --list to see them)")
+    p.add_argument("--dialect", action="append", default=[],
+                   help="repeatable; default = every dialect for the class")
+    p.add_argument("--encodings", default="raw",
+                   help="comma-separated, or 'all' for every encoding valid for the class")
+    p.add_argument("--marker", default="probe-9c2f")
+    p.add_argument("--port", type=int, default=8111,
+                   help="callback port for the SSRF/XXE templates")
+    p.add_argument("--list", action="store_true", help="list classes, dialects, encodings")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--out", help="write the set to this path instead of stdout")
+    p.set_defaults(fn=cmd_payload)
 
     p = sub.add_parser("web", help="live-website recon and coverage")
     wsub = p.add_subparsers(dest="web_cmd", required=True)
@@ -995,6 +1235,10 @@ def main() -> int:
     p.set_defaults(fn=cmd_poc_run)
 
     p = sub.add_parser("validate-report"); p.add_argument("id"); p.set_defaults(fn=cmd_validate_report)
+    p = sub.add_parser("impact-gate", add_help=False,
+                       help="the impact-bar gate — run BEFORE opening a report lane")
+    p.add_argument("rest", nargs=argparse.REMAINDER)
+    p.set_defaults(fn=cmd_impact_gate)
     p = sub.add_parser("report"); p.add_argument("id")
     p.add_argument("--layout", choices=sorted(LAYOUTS), default="github",
                    help="destination layout (default: github = private GHSA draft / huntr form)")
@@ -1008,6 +1252,10 @@ def main() -> int:
     p.set_defaults(fn=cmd_ledger)
 
     p = sub.add_parser("metrics"); p.set_defaults(fn=cmd_metrics)
+
+    # ---- the swarm: width computed from the target, not guessed ----
+    SW.add_parser(sub)
+    sub.choices["swarm"].set_defaults(fn=cmd_swarm)
 
     # ---- the run board: state, so a reprint can't disagree with what actually happened ----
     p = sub.add_parser("board", help="the live run board (state-backed; see the run-board skill)")
@@ -1024,7 +1272,7 @@ def main() -> int:
     b.set_defaults(board_fn=lambda a: B.cmd_add(a))
 
     for name, status in (("start", "running"), ("done", "done"),
-                         ("block", "blocked"), ("na", "na")):
+                         ("block", "blocked"), ("na", "na"), ("handoff", "handoff")):
         b = bsub.add_parser(name, help=f"mark a row {status}")
         b.add_argument("target"); b.add_argument("n", type=int)
         b.add_argument("--result", default=""); b.add_argument("--scope", default="")
@@ -1048,6 +1296,15 @@ def main() -> int:
     b.add_argument("target"); b.add_argument("id")
     b.add_argument("--layout", choices=sorted(LAYOUTS), default="github")
     b.set_defaults(board_fn=lambda a: B.cmd_lane(a))
+
+    b = bsub.add_parser("swarm", help="append a whole sized swarm in one call")
+    b.add_argument("target")
+    b.add_argument("--member", action="append", required=True, help="agent:shard (repeatable)")
+    b.add_argument("--id", default="", help="swarm id, e.g. coverage/depth/stack/prove")
+    b.add_argument("--role", default="", help="the hunting method this swarm runs")
+    b.add_argument("--passes", type=int, default=0)
+    b.add_argument("--plan", default="", help="plan_sha256 the membership came from")
+    b.set_defaults(board_fn=lambda a: B.cmd_swarm(a))
 
     b = bsub.add_parser("show", help="render the board")
     b.add_argument("target"); b.add_argument("--watch", action="store_true")

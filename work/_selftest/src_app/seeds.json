@@ -1,0 +1,22 @@
+{
+  "_comment": "Deliberately planted defects. tests/test_fleet_hunting.py reads this; keep it in sync.",
+  "seeds": [
+    {"id": "coverage-cmdi", "role": "coverage", "class": "command-injection", "cwe": "CWE-78",
+     "file": "app.py", "symbol": "run_report", "marker": "os.system(",
+     "surface_readable": true,
+     "note": "argument concatenated straight into a shell string in the route handler"},
+    {"id": "depth-exec", "role": "depth", "class": "code-execution", "cwe": "CWE-94",
+     "file": "handlers.py", "symbol": "render_template", "marker": "eval(",
+     "surface_readable": false, "indirection": "Registry / plugin table",
+     "entry": "app.py", "entry_symbol": "run_plugin",
+     "note": "the route passes a NAME; the sink is reached through REGISTRY, so reading the route finds nothing"},
+    {"id": "stack-debug", "role": "stack", "class": "info-disclosure", "cwe": "CWE-215",
+     "file": "settings.py", "symbol": "DEBUG_ENDPOINTS", "marker": "/_debug/config",
+     "surface_readable": true,
+     "note": "framework debug surface shipped enabled; a class-first sweep never asks for it"},
+    {"id": "negative-control", "role": "coverage", "class": "command-injection", "cwe": "CWE-78",
+     "file": "app.py", "symbol": "run_export", "marker": "subprocess.run(",
+     "is_vulnerable": false, "defense": "argv list, shell=False, and an allow-list on fmt",
+     "note": "same shape as coverage-cmdi and correctly defended - reporting it is a false positive"}
+  ]
+}

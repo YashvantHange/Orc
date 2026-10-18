@@ -46,11 +46,25 @@ class AuthzFinding:
 
 
 def _login(base: str, spec: dict) -> dict:
-    """Return the Authorization header dict for an identity spec, or {} for anon."""
+    """Return the auth header dict for an identity spec, or {} for anon.
+
+    Bearer is the default, but plenty of products authenticate with a vendor-specific
+    header instead (Files.com uses X-FilesAPI-Key). Such a header is invisible to any
+    tooling that assumes Authorization, so an identity may name its own:
+
+        {"name": "userA", "token": "...", "header": "X-FilesAPI-Key", "scheme": ""}
+
+    `scheme` is the prefix before the value; "" means send the token bare.
+    """
     if spec.get("anon"):
         return {}
+    if spec.get("headers"):                      # fully explicit, used verbatim
+        return dict(spec["headers"])
     if spec.get("token"):
-        return {"Authorization": f"Bearer {spec['token']}"}
+        name = spec.get("header", "Authorization")
+        scheme = spec.get("scheme", "Bearer" if name == "Authorization" else "")
+        value = f"{scheme} {spec['token']}".strip() if scheme else spec["token"]
+        return {name: value}
     login = spec.get("login")
     if not login:
         return {}

@@ -4,7 +4,8 @@ Find unknown vulnerabilities in open-source AI/ML software (Python and JS/TypeSc
 at runtime, and disclose them responsibly through a private GitHub Security Advisory or
 [huntr](https://huntr.com/guidelines).
 
-Nine agents in `.claude/` do the reasoning. The Python in this repo is the muscle that runs
+Seventeen agents in `.claude/` do the reasoning — ten hunters, run in waves, plus the orchestrator,
+the report lane, and the two store keepers (`memory`, `mistake`). The Python in this repo is the muscle that runs
 scanners, boots targets, sends probes and records evidence.
 
 ## Agents
@@ -14,9 +15,14 @@ scanners, boots targets, sends probes and records evidence.
 | `sec-orchestrator` | plans the hunt, routes leads, holds the gates |
 | `web-recon-hunter` | attack surface of a live site — crawl, JS/sourcemaps, API specs |
 | `authz-logic-hunter` | IDOR, BOLA, privilege escalation, mass assignment |
-| `injection-hunter` | RCE, SSRF, SSTI, SQLi, traversal, deserialization |
+| `rce-exec-hunter` | code execution, argument & env injection, deserialization, expression languages |
+| `server-side-hunter` | SSRF, XXE, traversal, arbitrary write, uploads, host-header, cache, smuggling |
+| `datastore-hunter` | SQL / NoSQL / Cypher / ORM / search injection, ORDER BY & identifier injection |
+| `xss-hunter` | reflected, stored, DOM and mutation XSS; sanitizer, encoder and CSP bypass |
+| `resource-dos-hunter` | ReDoS, expansion bombs, event-loop stalls, stored cycles, OOB index math |
 | `authn-crypto-hunter` | auth bypass, JWT, secrets exposure, CORS, weak crypto |
-| `client-side-hunter` | DOM XSS, prototype pollution, CSRF, clickjacking |
+| `client-side-hunter` | prototype pollution, postMessage, CSRF, clickjacking, CSP, cookies |
+| `injection-hunter` | prompt injection, insecure output handling, model supply chain, unclaimed sinks |
 | `report-writer` | evidence → report with CWE, CVSS 3.1, dup-check |
 | `report-auditor` | cold fact-check — opens every cited line |
 | `report-editor` | structure, voice, rendering |
@@ -24,6 +30,17 @@ scanners, boots targets, sends probes and records evidence.
 The two report auditors read the finished report cold and each returns PASS or BLOCK. Nothing is
 delivered without both, plus a PoC that actually ran. Skills in `.claude/skills/` are the
 methodology each agent follows.
+
+Coverage runs on two axes. `vuln-playbooks` and `web-playbooks` sweep class-first; `stack-playbooks`
+sweeps stack-first (Next.js, Node, Spring Boot, Laravel, ASP.NET, Django/Rails, gRPC, Kubernetes,
+CI/CD), because a class sweep never thinks to ask for `/actuator/heapdump`. `api-inventory` finds the
+API versions nobody retired and the SPA route groups nobody guarded, and `chain-craft` runs on every
+confirmation before the report is written, so a Low that was really step one of a Critical is caught
+before triage rather than after.
+
+Parts of `stack-playbooks`, `api-inventory` and `chain-craft` are adapted from
+[Claude-BugHunter](https://github.com/elementalsouls/Claude-BugHunter) by Sachin Sharma, whose skill
+content is CC-BY-4.0.
 
 ## Install
 

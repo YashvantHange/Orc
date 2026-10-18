@@ -17,6 +17,39 @@ competent peer found this,"* not *"a model generated this."* Every disclosure �
 Evidence, PoC** — must clear five rules. `report-editor` judges 3-4 by reading the draft;
 `report-auditor` judges 1-2 and 5. You write to them in the first place.
 
+### Correct *and* complete — neither one bought with the other
+
+Two failure modes, and they pull in opposite directions. Guard against both.
+
+**Getting it wrong.** A disclosure is an argument a stranger checks, and they check it by sampling —
+they open one cited line, re-run one command, test one assertion. A load-bearing claim that turns out
+to be false costs more than the sentence: it makes the reader re-verify things they would otherwise
+have accepted, and it spends credibility that belongs to the person who filed the report. Treat a
+false load-bearing claim as a serious defect to be found and fixed before delivery, not as a
+catastrophe to be avoided by writing less.
+
+**Getting it thin.** A report that is correct because it says very little is also a failed report. The
+maintainer needs enough to reproduce the bug, locate the defect, understand why it happens, judge the
+severity and write the patch — without a follow-up round. Vagueness, hedging, missing mechanism and
+absent reproduction detail are quality defects in their own right, and `report-editor` should say so.
+
+**So when a claim cannot be supported yet, the default is to go and establish it, not to delete it.**
+Open the file, run the case, capture the output — then write it with the detail it deserves. Cutting
+is the fallback for a claim that genuinely cannot be established and that the argument does not need;
+when the argument *does* need it, an unverifiable claim means the finding is not ready, not that the
+sentence should be quietly dropped. What must never happen is asserting it anyway: "probably",
+"should", "would likely" and "in principle" are not evidence. A claim you reasoned to rather than
+observed is welcome — labelled as reasoning, in `Not tested` or in the sentence itself.
+
+**The trap worth knowing: a correct citation supporting a false claim.** Checking that `file.ts:38`
+says what you quoted is easy; checking that the *proposition the quote is offered to support* is true
+is a different act. On this pipeline a sentence cited the right file and the right line range —
+byte-perfect — while asserting an asymmetry between two code paths that did not exist. It carried the
+report's whole marginal-gain argument and survived one audit, until a later pass executed the other
+path and watched it behave the way the report said it could not. Quote-checking is necessary and not
+sufficient: for a load-bearing sentence, ask what would be true of the running system if this were
+right, and go and look.
+
 **1. Verifiable — every claim traces to a fact.** No sentence asserts behavior you did not read or
 observe. Each technical claim points to a `file:line`, a captured request/response, a stack frame, or
 an `evidence.json` hash. If you can't cite it, cut it or go prove it. Never invent a version, line
@@ -84,7 +117,8 @@ has to invent).
 Runs **before** the novelty gate, because a bug that isn't a security bug never needs a dedup check.
 We hunt vulnerabilities. A crash, a slow path, a wrong result, a missing validation that only ever
 inconveniences the operator — those are bugs the project's issue tracker wants, and filing them as
-security reports burns the program's patience and your signal. Three questions, all three `yes`:
+security reports burns the program's patience and your signal. Four questions, all four `yes`
+(the fourth is below, after the exclusions):
 
 1. **Is there an attacker?** Name a concrete party who wants this to happen and who does *not* already
    have the outcome by legitimate means. "An authenticated user" counts only when the outcome exceeds
@@ -105,10 +139,85 @@ with no demonstrated impact; a config the operator explicitly opted into; a feat
 documented that you'd have designed differently. Record these as `OUT_OF_SCOPE` with a one-line reason
 and move on — do not dress them up with a CVSS vector.
 
+### Question 4 — is the thing you're calling a bug the component's stated purpose?
+Read the component's own name, README and docstring before you write it up. If they describe it as
+**developer, debug, preview, inspector, hot-reload or remote-tooling** infrastructure, then an open
+transport is that component doing its job, not a vulnerability: binding `0.0.0.0`, accepting
+unauthenticated connections, omitting an `Origin` or CSRF check, or accepting data it was built to
+receive. "An attacker can reach it and send it input" is reachability, which is *half* of a bug. The
+finding exists only when you can demonstrate a **concrete exploitable defect in what the component
+then does with that input** — parser memory corruption, deserialization, command execution, credential
+theft. No proven downstream sink, no report: `OUT_OF_SCOPE`, one-line reason, move on.
+
+> Observed 2026-09-04, Google Bug Hunters, report 555219062 (`google/filament` RemoteServer binds every
+> interface, no `Origin` validation) — closed **Infeasible**: "Binding to all network interfaces
+> (0.0.0.0) is typical for such developer tools… the described impact of pushing assets to the viewer
+> application is just the intended functionality of the component. Without a concrete, exploitable
+> vulnerability in the underlying asset parser, merely displaying an unexpected 3D model in a developer
+> viewing tool does not cross a meaningful security boundary." That report had passed a runtime PoC, a
+> clean-room rerun, two cold auditors and the delivery gate. Those stages check that claims are *true*;
+> this gate is the only thing that checks the impact is *worth filing*.
+
+### Hard exclusion — CI, presubmit and release-pipeline guard defects
+A broken check in a build/CI/presubmit/release workflow — a guard that always passes, a comparison that
+never matches, a job an approved PR can influence — is **not a reportable security finding**, and with
+Google it is a confirmed dead end (three closures, no reward, no tracking). The vendor-stated ceiling is
+*"publicly disclose this issue on GitHub as a public issue."* Do that instead of opening a report lane.
+This holds whether or not the defect needs maintainer PR approval to trigger.
+
 Availability findings get one extra question, because that is where feature bugs disguise themselves:
 **does one attacker request degrade the service for everybody else, without privileges the attacker
 shouldn't have?** A slow endpoint that only slows its own caller is a performance issue. An
 unauthenticated request that pins the event loop for every user is a vulnerability.
+
+### Question 5 — does the impact clear the destination program's bar?
+The gate above asks whether this is *a vulnerability*. This one asks whether it is *worth filing*, and
+it is a separate question: a finding can be a genuine, novel, boundary-crossing vulnerability and still
+be closed as not worth tracking. Answer all five before a report lane opens, and record the answers —
+`hunt impact-gate <id>` writes them to `state/impact/<id>.json`, and both `hunt report` (the scaffold)
+and `hunt validate-report` (the delivery gate) refuse without a PASS on file.
+
+Four refusals, each independent, each drawn from a real closure:
+
+- **Does it fire on the DEFAULT configuration?** Answer `yes` or `no` to the gate
+  (`--default-config`). `no` — the application had to opt into some setting for the attack to work —
+  means the affected population is only whoever opted in, and it is the heaviest single condition
+  there is: the stacking threshold below drops from three conditions to two. A finding that fires on
+  the target as shipped is the only shape that has ever been worth a report lane at Google OSS VRP.
+- **Severity floor — below CVSS 4.0, don't file.** Nothing under 4.0 has ever been accepted here.
+  SHAKA-003 scored 3.8 and came back Infeasible. Between 4.0 and 5.0, say plainly to the user that a
+  reward is unlikely *before* the lane is spent. **But treat this as a floor, never as a predictor:
+  clearing it buys nothing.** SHAKA-C8-001 self-scored **7.1 High** — a runtime-confirmed `C:H`
+  credential disclosure with a one-line fix, at nearly twice the floor — and was closed **P4/S4
+  Infeasible** on 2026-09-21 (issue 564006943) because three conditions had to line up. CVSS prices
+  preconditions at zero; the triager does not. Never present a score to the user as a forecast.
+- **A primitive is not a finding — demonstrate the gadget.** A proven prototype write, an unvalidated
+  font family, a spoofable field, an out-of-bounds index: each is a *capability*, and the report needs
+  the chain from that capability to a concrete C/I/A outcome, demonstrated, not argued. If the honest
+  sentence is "the PoC proves the primitive and stops there," the ceiling is an upstream GitHub issue.
+- **Count the preconditions — three independent ones is below the bar, two when one is
+  configuration.** Non-default configuration, an action the victim must be taking right now, and an
+  attacker who must already occupy a semi-trusted role are each a discount the triager applies even
+  when CVSS prices none of them. SHAKA-003 needed all three at once; so did SHAKA-C8-001 at more than
+  double the score, with the same result.
+
+  **Count them at lead-selection, not at report time.** All four answers come out of the source read,
+  before a harness exists. One target ran eleven cycles and accepted nothing: every finding was real
+  and confirmed, and every loss was forecastable on day one. This question is cheap and it is the one
+  that saves whole cycles — the report-time gate only saves the lane.
+
+  **And state them honestly in the report.** The count is not a number to minimise past the gate:
+  SHAKA-C8-001's Summary enumerated its three preconditions plainly, and that honest sentence is
+  exactly what the triager graded. Softening them does not change the outcome, it just moves the
+  refusal later and costs credibility with it.
+
+> Observed 2026-09-08, Google Bug Hunters, report 557494518 (`shaka-player` Cast sender indexes its
+> property cache with a receiver-supplied name, so `__proto__` writes onto `Object.prototype` in the
+> casting page) — closed **Infeasible**: "the issue you reported is not severe enough for us to track
+> it as a security bug… Please feel free to publicly disclose this issue on GitHub as a public issue."
+> It was runtime-confirmed, cold-audited twice and gate-receipted. The same sentence closed FIL-004 and
+> FIL-005. Treat that wording as the program's below-threshold boilerplate, and this question as the
+> only stage that catches it before the lane is spent.
 
 ## Novelty requirement (zero-day only — gates whether a finding is reportable at all)
 Two hard exclusions:
@@ -209,16 +318,114 @@ Everything the title drops — attacker position, blast radius, precondition —
 Impact, which is where a triager looks next. The report **filename** keeps its `<repo>-<CWE>-<id>`
 scaffold form; this rule is about the H1 and the submission subject line.
 
+## The report file is the paste — nothing reporting-side may appear in it (HARD RULE)
+
+The reporter pastes the **entire report file, first line to last, in one go** into the destination
+form's description field. There is no step where a human strips a header, skips a block, or pastes
+"the part below the line". Write the file so that operation is correct.
+
+Therefore the report `.md` contains **only** text addressed to the vendor. Banned from it outright:
+
+- A `Provenance`, `Form fields`, `For our records`, `Internal`, or `Not part of the advisory body`
+  section. **The tell is a heading that instructs the reader to ignore what follows** — if a block
+  needs that disclaimer, it does not belong in the file.
+- A scaffold wrapper heading or a `---` divider that exists to separate "ours" from "theirs".
+  The file opens on the title `#` heading and runs to the last line of the advisory.
+- Internal finding ids presented as report metadata (`GCLI-...`, `F0xx`). An id inside an attached
+  PoC source comment is fine — that file is an attachment, not the pasted body.
+- Any local path the triager cannot open: `work/...`, `evidence/...`, `state/...`, a `C:\Users\...`
+  path, scratchpad paths. Cite the **attached** artifact instead (`poc/expected-output.txt`), which
+  is what they actually receive.
+- Notes about our own pipeline, gates, audits, agents or workspace.
+
+All of that goes in `HOW-TO-FILE.md`, which is internal and never pasted.
+
+**The trap when you remove such a block.** Provenance tables usually carry the tested commit/tag and
+the runtime. Deleting one is the standard way to strip the *only* statement of what the report was
+tested against — which silently unanchors every `file:line` in the document, because a bare release
+string does not pin a moving branch. After removing internal content, confirm the submitted body
+still states: the affected version, the commit/tag the line numbers refer to, and the runtime.
+Put the tag line in the `Details` preamble next to Precondition/Entrypoint.
+
+Both audits check this. The editor rules on it as a `major`; the auditor treats a body that no
+longer states its tested commit as a `major`.
+
+**Freeze before auditing.** Make every edit first, then run both audits against one stable hash.
+Editing while an audit is in flight produces verdicts bound to bytes that no longer exist, voids the
+receipt, and forces the whole lane again. This has cost multiple full re-audit cycles.
+
 ## Required content (the layout decides the headings; this is what must be in them)
 Title · Affected repo+versions/commit · CWE · CVSS 3.1 vector+score · Summary · Affected component
 (`file:line`) · PoC (minimal, benign, **owner-verifiable** per rule 5) · Evidence (bundle ref + key
 req/resp + stack trace, secrets redacted) · Impact (who, blast radius, realistic attacker) · **Root
-cause** · Remediation (concrete diff / precise instruction) · Duplicate-check note · Disclosure
-timeline · Credit.
+cause** · **Why the existing mitigations don't apply** · Remediation (concrete diff / precise
+instruction, alternatives ranked) · **Verifying the fix** · **Not tested** (the honest limits) ·
+Duplicate-check note · Disclosure timeline · Credit.
 
 **Quote, don't just cite.** Every `file:line` the argument leans on gets its actual code shown inline
 in a short fenced snippet, so the reader understands the claim without opening the file. A bare line
 reference is not enough for a load-bearing step.
+
+## Four sections that earn their place (add these — they do real work for a triager)
+
+Derived from reading an accepted, fixed Google VRP report and keeping only the parts that carried
+weight. Each answers a question a triager asks anyway; answering it in the report saves a round trip.
+
+1. **"Why the existing mitigations don't apply."** Name the guards that *look* like they cover this —
+   the path check, the trust gate, the allowlist, the sanitiser — and show why each one misses. This is
+   the first objection a maintainer raises, and a report that pre-empts it reads as researched rather
+   than lucky. It is also where a weak finding exposes itself: if you cannot say why a nearby control
+   does not already stop you, you may not have a finding.
+2. **CVSS as a table, not a paragraph.** One row per metric: value, and a justification tied to what
+   you actually demonstrated. A reviewer disagreeing with your score needs to find the one row they
+   dispute, not parse a wall of prose.
+
+   | Metric | Value | Justification |
+   |---|---|---|
+   | AV | Network | the extension is fetched from a remote repository |
+   | UI | Required | the victim installs it and then starts the CLI |
+
+3. **"Verifying the fix."** Give the maintainer the exact commands that show the patch works and the
+   PoC no longer fires — including the negative control that should stay silent either way. Almost no
+   report does this, and it moves you from "someone reporting a problem" to "someone handing over a
+   tested change".
+4. **Remediation with the alternatives ranked.** Give the recommended fix, then the one or two real
+   alternatives and one line on why yours wins (surgical, no API break, closes the class not the
+   instance). Where two approaches differ in a way that matters, a three-row comparison table beats
+   three paragraphs.
+
+**Tiered reproduction.** Lead the PoC with the cheapest command that proves the bug — ideally one line
+whose output is unambiguous — then the full run underneath. A triager confirms in thirty seconds and
+reads the detail only if they need it.
+
+## Impact discipline — the anti-patterns that get reports discounted
+
+A real accepted report was studied for this list. It was accepted **despite** these, not because of
+them, and its severity narrative was not supported by its own evidence. Every one of these is banned:
+
+- **No impact scenario the PoC does not demonstrate.** If you proved a crash, report a crash. Do not
+  extrapolate to code execution, credential theft or supply-chain compromise because the primitive
+  *could* enable them. State the demonstrated impact, then, if a further consequence genuinely
+  follows, mark it plainly as reasoning rather than a result — the `Not tested` section exists for it.
+- **No hypothetical victim code.** Inventing a function the product might contain and reporting a
+  bypass of it is fabrication, however carefully hedged. Cite code that exists at the pinned commit.
+- **A demonstration you ran yourself is not the vulnerability.** Executing a payload in your own
+  process shows what a primitive does in general; it does not show that the product reaches that
+  primitive with attacker-controlled input. Only the path the product actually takes counts.
+- **No business-impact padding** — financial-loss estimates, regulatory-fine speculation, stakeholder
+  matrices, comparisons to famous CVEs, likelihood tables. None of it changes the triage decision and
+  it buries the parts that do.
+- **No confidence theater.** Do not decorate claims with ✅/⚠️ to mark "confirmed" versus "possible".
+  Say what you observed in plain sentences; an unproven claim marked with a warning sign is still an
+  unproven claim.
+- **Scrub identity from every pasted run.** Usernames, home directories, hostnames, machine names,
+  absolute local paths and email addresses must not appear in output blocks — replace them with a
+  neutral placeholder. The report studied for this list leaks its author's real name in a home path
+  in several blocks. This is both a privacy leak and a professionalism tell.
+
+The through-line: **your evidentiary discipline is the asset.** Under-claiming a proven finding costs
+a severity point. Over-claiming costs the reader's trust in everything else you wrote, including the
+parts that were right.
 
 ## Root-cause graph (make the "why" mechanical, not a vibe)
 State the causal chain, not one isolated line:
