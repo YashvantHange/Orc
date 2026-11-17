@@ -213,6 +213,55 @@ def evaluate(ans: dict) -> tuple[str, list, list]:
                 f"for an availability-only finding here is an upstream GitHub issue, not a VRP "
                 f"report — and on shaka-player that route produced a merged fix in two days")
 
+    # 3c. Is the ATTACKER MODEL itself one the destination program publishes as invalid?
+    #
+    #     Google Bug Hunters lists "attacks working only when sharing a local account with the
+    #     attacker" as an invalid attack scenario — a category, not a severity judgement:
+    #     bughunters.google.com/learn/invalid-reports/invalid-attack-scenarios/
+    #         attacks-working-only-when-sharing-local-account-with-the-attacker
+    #     "Because operating systems themselves do not fully protect against attackers with this
+    #     level of access, any fix we could implement would be easy to bypass, and we don't want to
+    #     offer a false sense of security to our users."
+    #
+    #     JUL-001 was closed on exactly this sentence (2026-11): CVSS 7.3 High, runtime-proven,
+    #     complete PoC, package still unpatched at npm latest — and dead on the attacker model
+    #     alone. AGY-003 (a second local uid reaching a loopback mic port) was closed as intended
+    #     behaviour, which is the same category in different words. Two findings, one model.
+    #
+    #     This gate PASSED JUL-001 with `attacker` reading, verbatim, "Any other unprivileged local
+    #     account on a shared Linux host" — because it took the attacker as prose and never matched
+    #     it against the program's own invalid-scenario list. That is the gap this check closes.
+    #
+    #     Scope note, and the reason this reads the principal rather than AV:L: AGY-001 and AGY-002
+    #     are both AV:L and both stay in scope here, because their attacker is untrusted CONTENT the
+    #     victim opens, not an account on the victim's box. The exclusion is about who the attacker
+    #     IS. Likewise code escaping a sandbox the PRODUCT claims to confine is still in scope — the
+    #     OS is not the thing holding that line.
+    LOCAL_PRINCIPAL = re.compile(
+        r"\b(?:local\s+(?:account|user|uid|login)|unprivileged\s+(?:local\s+)?(?:account|user)|"
+        r"(?:another|other|second|different)\s+uid)\b", re.I)
+    SAME_HOST = re.compile(
+        r"\b(?:same\s+(?:host|machine|system|box|computer)|shared\s+(?:host|machine|box|/tmp)|"
+        r"shared\s+\w+\s+host|another\s+login|co-?tenant)\b", re.I)
+    DECISIVE_LOCAL = re.compile(r"\bunprivileged\s+local\s+account\b", re.I)
+
+    attacker_txt = str(ans.get("attacker") or "")
+    is_google = any(k in program for k in ("google", "bughunters", "g.co/vulnz"))
+    if is_google and (DECISIVE_LOCAL.search(attacker_txt) or
+                      (LOCAL_PRINCIPAL.search(attacker_txt) and SAME_HOST.search(attacker_txt))):
+        blockers.append(
+            "the attacker model is another local account on the victim's own host, which Google "
+            "publishes as an INVALID ATTACK SCENARIO, not a low-severity one: \"operating systems "
+            "themselves do not fully protect against attackers with this level of access, [so] any "
+            "fix we could implement would be easy to bypass\". JUL-001 was closed on that sentence "
+            "at CVSS 7.3 with a complete PoC against an unpatched release, and AGY-003 is the same "
+            "model closed as intended behaviour. No score and no quality of proof moves this "
+            "category — re-aim at an attacker who does NOT already have an account on the box "
+            "(untrusted content the victim opens, a network peer, or a sandbox the product itself "
+            "claims to confine), or take it upstream as a GitHub issue. "
+            "bughunters.google.com/learn/invalid-reports/invalid-attack-scenarios/"
+            "attacks-working-only-when-sharing-local-account-with-the-attacker")
+
     # 4/5. The two classes already closed Infeasible by name. See the 2026-09-04 mistake-log entry.
     if ans.get("dev_tool"):
         blockers.append(
@@ -357,8 +406,18 @@ def main(argv=None) -> int:
     print(f"  {p.relative_to(ROOT)}")
     if verdict == "BLOCK":
         print("\n  No report lane. Do not write this up, do not open a draft advisory.")
-        print("  If it is a real defect, the ceiling is an upstream GitHub issue — say that to the")
-        print("  user, with the blocker above as the reason, and let them decide.")
+        print("  If it is a real defect, the ceiling is an upstream GitHub ISSUE - and the issue")
+        print("  draft is still YOUR deliverable, by the same rule that makes a PASS produce a")
+        print("  finished report without being asked. A blocked gate is a verdict, not a dead end;")
+        print("  leaving the user a blocker and nothing to act on wastes the whole hunt.")
+        print(f"\n  Write it to  work/<slug>/upstream-issue-<short-name>.md")
+        print("  It must carry: the invariant in one sentence - the chain with every file:line you")
+        print("  OPENED at the pinned commit - the rebuttals you tried and why each failed - the")
+        print("  preconditions, quoting this blocker as the reason it is an issue and not a report -")
+        print("  the suggested fix - and what is NOT demonstrated (no build, no sanitizer, no run).")
+        print("  Say 'this is not a disclosure report and must not be filed as one' in it, in those")
+        print("  words. Then stop: pressing submit is the user's call, here as everywhere.")
+        print("  Full shape and the worked example: `report-craft` section 'When the gate blocks'.")
     return 0 if verdict != "BLOCK" else 1
 
 

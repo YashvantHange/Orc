@@ -134,12 +134,23 @@ def test_find_output_matches_only_real_output():
 
 
 def test_freeze_has_catches_a_fabricated_version():
-    """The defect class: a pinned version that was never installed."""
+    """The defect class: a pinned version that was never installed.
+
+    The version must be one that CANNOT ever be installed, not merely one that is not installed
+    today. This test asserted `requests 2.34.2` and went green for as long as that release did not
+    exist; once requests shipped 2.34.2 the assertion inverted and the test failed while
+    `freeze_has` was working perfectly. A local version segment (PEP 440 `+...`) is never published
+    to PyPI, so no future release can make this one rot the same way.
+    """
     _clean()
     for _ in range(2):
         runlog.record(str(SANDBOX), FID, 'python -c "print(1)"')
     doc = runlog.load(str(SANDBOX), FID)
-    assert not runlog.freeze_has(doc, "requests", "2.34.2")[0]
+    assert not runlog.freeze_has(doc, "requests", "999.999.999+never-installed")[0]
+    # and the control: a version that IS installed must still be found, so the assertion above
+    # cannot pass merely because freeze_has stopped matching anything at all.
+    import importlib.metadata as md
+    assert runlog.freeze_has(doc, "requests", md.version("requests"))[0]
 
 
 def test_volatile_mask_is_recorded_not_invented():
@@ -378,6 +389,44 @@ def test_impact_bar_blocks_the_two_dead_classes():
     assert _impact_pass(ci_guard=True) == "BLOCK"
     _clean()
     assert _impact_pass(dev_tool=True) == "BLOCK"
+
+
+def test_shared_local_account_attacker_blocks_on_a_google_program():
+    """Google publishes "attacks working only when sharing a local account with the attacker" as an
+    INVALID ATTACK SCENARIO. JUL-001 passed this gate with its attacker recorded verbatim as "Any
+    other unprivileged local account on a shared Linux host", was filed, and was closed on that
+    category at CVSS 7.3 with a complete PoC against an unpatched release. AGY-003 is the same
+    model closed as intended behaviour."""
+    _clean()
+    assert _impact_pass(
+        program="google-vrp",
+        attacker="Any other unprivileged local account on a shared Linux host - a build agent, "
+                 "a CI runner, a developer workstation with more than one login") == "BLOCK"
+    blockers = " ".join(impact_gate.load(FID)["blockers"])
+    assert "INVALID ATTACK SCENARIO" in blockers
+    assert "invalid-attack-scenarios" in blockers
+
+
+def test_shared_local_account_rule_is_scoped_to_google_programs():
+    """The exclusion is Google's published policy, not a universal truth — a local-privilege bug is
+    perfectly reportable elsewhere, so the rule must not leak into other destinations."""
+    _clean()
+    assert _impact_pass(
+        program="github",
+        attacker="another unprivileged local account on the same host") == "PASS"
+
+
+def test_untrusted_content_attacker_stays_in_scope_although_local():
+    """The exclusion is about who the attacker IS, not about AV:L. AGY-001 and AGY-002 are both
+    AV:L and both legitimately in scope, because their attacker is untrusted CONTENT the victim
+    opens rather than an account on the victim's box. Reading AV:L instead of the principal would
+    have killed two live findings."""
+    _clean()
+    assert _impact_pass(
+        vector="CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H",
+        program="google-vrp",
+        attacker="anyone whose repository content the victim opens - a template repo, a "
+                 "pull-request branch, a dependency checkout, a shared project") == "PASS"
 
 
 def test_impact_bar_passes_a_real_finding_and_records_the_override():
