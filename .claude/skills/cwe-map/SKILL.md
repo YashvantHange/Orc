@@ -79,6 +79,8 @@ description: >
 - Race in a multi-user context leaking A's data to B (shared global/cache/session) — CWE-362 + CWE-200
   (wrong-session delivery — CWE-488)
 - Uncontrolled resource consumption (ReDoS / algorithmic DoS) — CWE-1333 (generic — CWE-400)
+- Uncontrolled recursion / a stored cycle that never terminates — CWE-674
+- Excessive iteration driven by a declared count — CWE-834
 - Improper input validation / unhandled condition → crash — CWE-20 / CWE-703
 
 **AI/ML-native (OWASP LLM Top-10)**
@@ -112,6 +114,25 @@ description: >
 - Uncontrolled resource consumption from missing limits (GraphQL depth/batching, unbounded page size) —
   CWE-770 (distinct from CWE-400: 770 is *no limit defined*, 400 is *consumption not controlled*)
 - Personal information exposure — CWE-359 (use when the disclosed data is PII specifically)
+
+**State integrity (the `state-integrity` family — S1 error-path corruption, S2 cross-request reuse)**
+- Use-after-free — CWE-416 · double free — CWE-415 · release of the wrong resource — CWE-762
+- Use of an uninitialised variable — CWE-457 · access of an uninitialised pointer — CWE-824. Pick these,
+  not 416, when the slot was **never written** rather than freed — that is the `CVE-2026-109618` shape,
+  and MSAN rather than ASAN is what proves it.
+- Out-of-bounds write — CWE-787 · out-of-bounds read — CWE-125 · improper validation of an array index
+  — CWE-129 (the index shapes; `resource-dos` owns the ones reached from a caller's bad bounds)
+- NULL pointer dereference — CWE-476 · improper resource shutdown or release — CWE-404
+- Incomplete cleanup after an error — CWE-459 · improper check for exceptional conditions — CWE-754 ·
+  improper handling of a fatal/abnormal condition — CWE-705
+- **Exposure of private information from one session to another — CWE-488.** This is the primary id for
+  S2 data bleed through a module global, pooled worker or unreset cache; it points at the retention,
+  not at the read.
+- Sensitive info in a resource not removed before reuse — CWE-1230 · reliance on shared mutable state in
+  a concurrent context — CWE-567 · improper synchronisation — CWE-662 · race condition — CWE-362
+- **Stale authorization or identity context reused across requests** — CWE-488 for the retention plus
+  **CWE-863 incorrect authorization** for the wrong decision it causes. Lead with 863 when the app
+  *acted* on the stale context (a cross-tenant read or write) and with 488 when it only *returned* it.
 
 **Picking between two that both fit:** name the *weakness*, not the outcome — the CWE goes with the flawed
 line you're asking the maintainer to change. A secret leaking because a route has no owner check is

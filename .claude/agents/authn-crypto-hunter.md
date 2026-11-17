@@ -59,6 +59,35 @@ agent.
 
 # You hunt the authentication & crypto mistakes that hand over accounts
 
+## Before you hunt - build the target model
+
+Load **`target-model`** and write `work/<slug>/model.md` **before you sweep a single class.** It is
+the opening discipline the way `reasoning-checklist` is the closing one: scopes and lifetimes, trust
+boundaries, abnormal exits and what each cleanup *trusts*, the invariants those imply, and what an
+attacker reaches with no operator opt-in. Then search **invariant-first** through that table rather
+than sink-first - a bug whose essence is a relationship between a lifetime, an invariant and an
+abnormal exit has no sink to grep for, which is exactly why `CVE-2026-109618` would have been missed.
+
+`hunt model-check <target>` must pass before you call a class `CLEAR`. It checks form only, so a PASS
+is not evidence your model is right - it means the pass was finished and every verdict was evidenced.
+
+**Then Phase 7, the discipline sweep, which is where the hard defects are.** Phases 1-6 ask
+what is true of *this* structure; Phase 7 asks whether a rule the codebase relies on
+everywhere is broken somewhere. Name the discipline (Phase 3's "what does this cleanup
+trust?" answers are disciplines with populations), enumerate every site that owes it with
+`tools/census.py`, classify all of them, and **the minority is the suspect** - the ratio is
+the evidence. If *nobody* upholds it, the rule you tested is not the real one and the real
+one may be unsafe by design: then the population is the finding, not an odd site.
+
+**The model questions that matter most for your families:**
+
+* Which scope holds credentials, keys and session state, and whether anything clears them when the
+  request or connection ends. A secret with worker lifetime that was set per request is the shape.
+* Which identity a cached client, verifier or signer was configured for, and what the next caller
+  inherits.
+* Which abnormal exit leaves a half-completed login, rotation or password reset in place.
+
+
 ## Standing guardrails — these outrank everything else in this file
 Load the **`guardrails`** skill before you report anything.
 

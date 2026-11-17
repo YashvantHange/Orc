@@ -424,6 +424,73 @@ def check() -> None:
     for name in ("npm", "gh", "git"):
         print(f"  {name:14} {'OK (PATH)' if shutil.which(name) else 'MISSING on PATH'}")
 
+    check_native_toolchain()
+
+
+def check_native_toolchain() -> None:
+    """Report the C/C++ sanitizer toolchain. DETECTION ONLY — this installs nothing.
+
+    It exists because the pipeline was blind to a toolchain it already had and had already shipped
+    an accepted finding with (FIL-001, MSVC ASAN). A capability nobody can see is a capability
+    nobody uses, and the `native-sanitizer` skill needs to be able to say what is actually here.
+    """
+    print("Native sanitizer toolchain (detection only; see the `native-sanitizer` skill):")
+
+    # --- Windows / MSVC: the primary path, because its traces come out symbolized.
+    msvc_root = Path(r"C:\Program Files\Microsoft Visual Studio\2022\Community"
+                     r"\VC\Tools\MSVC")
+    cl = None
+    asan_dll = None
+    if msvc_root.is_dir():
+        for ver in sorted(msvc_root.iterdir(), reverse=True):
+            cand = ver / "bin" / "Hostx64" / "x64" / "cl.exe"
+            if cand.exists():
+                cl = cand
+                hits = list(cand.parent.glob("clang_rt.asan_dynamic-*.dll"))
+                asan_dll = hits[0] if hits else None
+                break
+    if cl is None:
+        cl = Path(shutil.which("cl") or "") if shutil.which("cl") else None
+    print(f"  {'msvc cl':14} {'OK ' + str(cl) if cl else 'MISSING - no cl.exe (ASAN path A)'}")
+    print(f"  {'asan runtime':14} "
+          f"{'OK ' + asan_dll.name if asan_dll else 'MISSING - clang_rt.asan_dynamic-*.dll'}")
+
+    sdk_inc = Path(r"C:\Program Files (x86)\Windows Kits\10\Include")
+    sdks = sorted((d.name for d in sdk_inc.iterdir() if d.is_dir()), reverse=True) if \
+        sdk_inc.is_dir() else []
+    print(f"  {'windows sdk':14} {'OK ' + sdks[0] if sdks else 'MISSING - Windows 10/11 SDK'}")
+
+    # --- WSL: the secondary path. Unsymbolized without llvm-symbolizer, which is the trap.
+    wsl = shutil.which("wsl")
+    if not wsl:
+        print(f"  {'wsl':14} MISSING - no wsl on PATH (path B unavailable)")
+        return
+    probe = ("for t in clang clang++ cmake ninja llvm-symbolizer valgrind gdb; do "
+             "printf '%s=' \"$t\"; command -v $t >/dev/null && echo OK || echo MISSING; done")
+    rc, out, _err = C_run_wsl(wsl, probe)
+    if rc != 0:
+        print(f"  {'wsl':14} present, but the toolchain probe failed (distro not started?)")
+        return
+    found = dict(line.split("=", 1) for line in out.split() if "=" in line)
+    print(f"  {'wsl':14} OK")
+    for tool in ("clang", "clang++", "cmake", "ninja"):
+        print(f"    {tool:12} {found.get(tool, 'MISSING')}")
+    sym = found.get("llvm-symbolizer", "MISSING")
+    note = "" if sym == "OK" else "  <-- WSL traces will be UNSYMBOLIZED; apt install llvm-21"
+    print(f"    {'llvm-symbolizer':12} {sym}{note}")
+    for tool in ("valgrind", "gdb"):
+        print(f"    {tool:12} {found.get(tool, 'MISSING')}  (optional; no playbook assumes it)")
+
+
+def C_run_wsl(wsl: str, script: str) -> tuple:
+    """Run a short bash script inside WSL and return (rc, stdout, stderr)."""
+    try:
+        r = subprocess.run([wsl, "-e", "bash", "-lc", script],
+                           capture_output=True, text=True, timeout=60)
+        return r.returncode, (r.stdout or "").replace("\x00", ""), r.stderr or ""
+    except (OSError, subprocess.SubprocessError) as e:          # noqa: BLE001
+        return 1, "", str(e)
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)

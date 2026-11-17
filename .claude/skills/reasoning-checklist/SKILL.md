@@ -47,6 +47,12 @@ exact next step, don't inflate it.
 5. **Did I sweep for more instances of this novel bug?** Grepped for sibling routes/sinks/inherited
    impls with the same flaw — there are usually more. (But a sibling that a *published* fix simply
    didn't reach is an incomplete-fix, not novel — see #8.)
+   **And the same sweep run forwards is a way to FIND a bug, not only to multiply one.** This item
+   points backwards by design: it fires once a finding exists. Pointed forwards it is
+   `target-model` Phase 7 — enumerate the population of sites that owe a rule, classify every one,
+   and the minority is the suspect. Worth knowing because the hard defects live there: a rule broken
+   in two places out of two hundred is invisible to any per-structure question, and `tools/census.py`
+   reproduced exactly that in one command where a hunter had found it by luck.
 6. **Did I estimate impact honestly?** Who's affected, blast radius (one object vs all tenants),
    realistic attacker + preconditions; mapped to a CVSS vector I can defend. **Name the variant** — the
    severity lives there, and a vague label is an over- or under-claim: reflected vs **stored** XSS, file

@@ -26,13 +26,25 @@ def merge(target: str) -> Path:
     scan = C.scandir(target)
     work = C.workdir(target)
 
-    # ---- normalized json findings from every tool ----
+    # Not every json in scan/ is a findings list. `language-coverage.json` is a DICT, and
+    # `findings += <dict>` appends its KEYS - five bare strings - after which the dedup loop
+    # below calls .get() on a str and dies with AttributeError, which the except here does not
+    # catch. It sorts before semgrep.json, so the whole correlate step failed on the first file.
+    # Skipping it by name alone would break again on the next non-findings artifact, so the shape
+    # is checked too: anything that is not a list of dicts is not a findings file.
+    NOT_FINDINGS = {"language-coverage.json", "profile.json"}
     findings: list[dict] = []
     for jf in sorted(scan.glob("*.json")):
+        if jf.name in NOT_FINDINGS:
+            continue
         try:
-            findings += json.loads(jf.read_text(encoding="utf-8"))
+            parsed = json.loads(jf.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
+        if not isinstance(parsed, list):
+            print(f"  skip {jf.name}: not a findings list ({type(parsed).__name__})")
+            continue
+        findings += [f for f in parsed if isinstance(f, dict)]
 
     # de-dup exact (tool, file, line, rule_id); track tool agreement per (file, line)
     seen: set[tuple] = set()

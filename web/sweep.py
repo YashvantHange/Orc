@@ -116,6 +116,15 @@ TARGETING = {
 # Matrix rows no primitive settles, even with a browser. Listed so the coverage report can never be
 # silently short: each names where the human-runnable recipe lives.
 MANUAL_ROWS = {
+    # H. State integrity — settled by state-integrity-hunter's two-identity differential, not by
+    # any single HTTP primitive. They print as outstanding on every sweep until it returns, which
+    # is what stops a hunt reporting complete coverage without having run the hunter at all.
+    "Error-path state corruption": ("H", "state-integrity § S1", "MANUAL"),
+    "Cross-request state reuse": ("H", "state-integrity § S2", "MANUAL"),
+    "Stale authorization context": ("H", "state-integrity § S2", "MANUAL"),
+    "Pooled object reuse without reset": ("H", "state-integrity § S2", "MANUAL"),
+    "Thread-local / async-context bleed": ("H", "state-integrity § S2", "MANUAL"),
+
     "CSTI": ("D", "web-playbooks § CSTI", "NEEDS-BROWSER"),
     "SPA route-guard bypass": ("D", "web-recon § 3 (bundle role checks)", "MANUAL"),
     "Client-side traversal / DOM redirect": ("D", "web-playbooks § Client-side traversal",
@@ -459,6 +468,24 @@ def verdict(r) -> str:
     return "NOT-CONFIRMED"
 
 
+def _model_status(workdir: Path) -> tuple:
+    """Is there a finished, evidenced `target-model` pass for this target?
+
+    Reported on every sweep next to the manual rows, for the same reason they are: a class list
+    printed with no model behind it is a hunt reporting coverage it does not have. Degrades to a
+    plain "not found" if the validator is unavailable - it must never block a sweep.
+    """
+    try:
+        sys.path.insert(0, str(ROOT / "tools"))
+        import model_check
+        res = model_check.check_path(workdir / "model.md")
+        if res.ok:
+            return True, f"{res.rows} invariant row(s), coverage {res.coverage:.0f}%"
+        return False, res.problems[0]
+    except Exception as e:                                    # noqa: BLE001
+        return False, f"could not validate the model ({type(e).__name__}: {e})"
+
+
 def report(base: str, out: dict, ctx: P.Ctx, workdir: Path) -> int:
     results = out["results"]
     hits = [r for r in results if verdict(r) == "HIT"]
@@ -488,8 +515,22 @@ def report(base: str, out: dict, ctx: P.Ctx, workdir: Path) -> int:
     for row, (g, where, kind) in sorted(MANUAL_ROWS.items(), key=lambda kv: kv[1][0]):
         print(f"    [{kind:13}] {g}  {row:38} -> {where}")
 
+    # The opening pass, reported on every sweep the way the manual rows are. A sweep is the
+    # sink-first half of a hunt; without the model pass the invariant-first half never ran, and
+    # printing a class list with no model behind it is how a hunt reports coverage it does not
+    # have. Form only - see tools/model_check.py on what a PASS does and does not mean.
+    model_ok, model_why = _model_status(workdir)
+    print("\n  Opening pass (target-model) - the invariant-first half of this hunt:")
+    if model_ok:
+        print("    [model ok     ]  work/<slug>/model.md present and the invariant sweep is evidenced")
+    else:
+        print(f"    [MODEL MISSING]  {model_why}")
+        print("      Sink-first sweeping alone cannot reach a defect whose essence is a "
+              "relationship\n      between a lifetime, an invariant and an abnormal exit.")
+
     print(f"\n  {len(hits)} HIT · {len(blocked_)} BLOCKED · {len(nobrowser)} NEEDS-SIGNAL · "
-          f"{len(unconfirmed)} not-confirmed · {len(clear)} clear · {len(MANUAL_ROWS)} manual rows outstanding")
+          f"{len(unconfirmed)} not-confirmed · {len(clear)} clear · {len(MANUAL_ROWS)} manual rows outstanding"
+          f" · opening pass {'ok' if model_ok else 'OUTSTANDING'}")
     if unconfirmed:
         print("\n  not-confirmed means SENT AND NOTHING CAME BACK — not defended. The")
         print("  payload may be wrong, the callback filtered, the timing masked - these rows stay open.")
@@ -511,7 +552,10 @@ def report(base: str, out: dict, ctx: P.Ctx, workdir: Path) -> int:
         "base": base, "ran_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "endpoints_known": out["endpoints"], "baselines_loaded": ctx.has_baselines(),
         "summary": {"hit": len(hits), "blocked": len(blocked_), "clear": len(clear),
-                    "manual_rows_outstanding": len(MANUAL_ROWS)},
+                    "manual_rows_outstanding": len(MANUAL_ROWS),
+                    "opening_pass_ok": model_ok},
+        "opening_pass": {"ok": model_ok, "detail": model_why, "skill": "target-model",
+                         "validator": "hunt model-check"},
         "results": [{**asdict(r), "verdict": verdict(r),
                      "cwe": probe.PRIMITIVE_META.get(r.name, {}).get("cwe", ""),
                      "group": probe.PRIMITIVE_META.get(r.name, {}).get("group", "")}

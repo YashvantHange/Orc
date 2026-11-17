@@ -236,6 +236,38 @@ are vulnerable without building everything (the faithful-harness pattern):
 This is a legitimate confirmation: it runs the maintainer's real code, just isolated. Keep the harness
 script in the evidence bundle.
 
+### 3b. Native targets — the instance is the harness, and the verdict is `sanitizer-confirmed`
+
+`dynamic/instrument.py` detects only `node` and `python` and health-checks a TCP socket, so there is no
+way to "boot" a C/C++ target. That does **not** make every native class permanently `BLOCKED`. For a
+native target:
+
+* **The instance is the sanitizer-built faithful harness**, not a server. Build it from the target's
+  real sources at the pinned commit (see `native-sanitizer` for the two verified build paths),
+  reimplementing only the one calling function verbatim with its upstream `file:line` in a comment.
+* Feed the malformed input, capture the sanitizer's own report, and **run the benign control** so the
+  bundle shows both. Record every run through `hunt poc-run`, which is what puts it in
+  `evidence/runlog.py` — that helper is generic process evidence (command, exit code, stdout/stderr
+  plus hashes, the target's commit) and needs nothing added for this. It wants `MIN_RUNS = 2` from a
+  clean tree, so run the PoC twice.
+* **Pick the sanitizer per defect class, because the wrong one reports nothing.** ASAN for lifetime
+  bugs (use-after-free, double free, out-of-bounds); **MSAN for uninitialised state**. A read of a
+  never-written slot that is in-bounds of a live allocation is invisible to ASAN. A class swept under
+  the wrong one is `BLOCKED (wrong instrumentation)`, never `CLEAR`.
+* That verdict is labelled **`sanitizer-confirmed`**, and it ranks with `runtime-confirmed`, not with
+  `code-confirmed`: the attack was delivered to the maintainer's real code and the impact was observed.
+  A native `CLEAR` must name the sanitizer run that came back clean; a sanitizer that was unavailable
+  is `BLOCKED`, naming it.
+
+### 3c. Worker-pool targets — the `pool` shape, for cross-request state
+
+A cross-request state-reuse bug (`state-integrity` § S2) cannot be confirmed against a single-process
+boot: it needs two requests served by the **same pooled worker**, and a control where they are served
+by different ones. Use `TargetProcess(..., pool=N, policy=...)` and read `state-integrity` for the
+seven fields the verdict must record. The trap, measured: raising the worker count is **not** a
+negative control — on win32 the default scheduling pins every connection to one worker, so the "control"
+reproduces the bug and the finding looks robust when nothing was tested. Force distribution explicitly.
+
 ## 4. Bundle + record
 For each confirmed bug: `hunt evidence work/<slug>/src <id> --poc "<cmd>" --url <poc-url>
 --root-cause <root_cause.md>` (writes `evidence.json`). Then update the ledger:

@@ -1284,3 +1284,210 @@ moved the product; it just wasn't a payable finding.
   action). **New** on the dimension: this is the first logged instance of *cross-member interference*
   inside one hunt, which is a hazard created by swarm width rather than by any single agent's
   reasoning. Log it as the first of a category to watch as width grows.
+
+## 2026-10-18 — Read a missing local gate receipt as "never submitted"; vLLM F009/F012 were already filed and rejected (SECOND occurrence)
+
+- **What happened:** in the cycle-2 hunt on `vllm-project/vllm`, `memory/vllm-hunt-triaged.md` described
+  F009 and F012 as CONFIRMED novel zero-days with reports written, and `ls state/gate/` showed no gate
+  receipt for either. I combined the two and briefed the orchestrator that they were "drafts, NOT
+  delivered." The hunt was planned around that belief. It was false. Verified this session with
+  `gh api repos/vllm-project/vllm/security-advisories --paginate`: both were submitted on 2026-07-22 and
+  rejected by the vendor within about 13 hours (`GHSA-fm28-38fh-rqqq` closed 2026-07-23T06:43:23Z;
+  `GHSA-rh93-xh58-rr8h` closed 2026-07-23T06:34:20Z; both `published_at: null`, `state: closed`).
+  Both defects are now also fixed upstream and covered by published advisories.
+- **How it surfaced:** the orchestrator caught it unprompted in the first minutes of the cycle, then the
+  vendor-side query confirmed it. Not a hook, gate, or user correction.
+- **Root cause:** **Verification miss**, with a specific inverted inference at its centre. I treated the
+  ABSENCE of a local gate receipt as evidence that nothing had been submitted. The receipt records that
+  OUR pipeline validated a report before delivery; it says nothing about whether a human later pasted the
+  report into a vendor portal. A missing receipt is equally consistent with "never filed" and "filed
+  outside the gated path". On this pipeline the house rule [[user-submits-google-reports-not-claude]]
+  means the user files by hand, so filed-without-a-receipt is the NORMAL case, not the anomaly. I held
+  the rule that explains the gap and still read the gap backwards. This compounds the known defect in
+  [[pipeline-ledger-missing-submitted-status]] (nothing writes `report_id` / `submitted_at` back to the
+  ledger, so the ledger structurally cannot answer "already submitted?"). Knowing an instrument cannot
+  answer a question is not a licence to infer the answer from its silence. Silence from an instrument
+  is not a reading — a direct No-Assumption violation.
+- **The rule:** [[ledger-status-not-evidence]] already existed ("check upstream before trusting the
+  ledger"). Sharpened: before briefing any cycle-N hunt on a target with prior findings, query the
+  VENDOR's own intake for status; never infer it from local state, and never from the absence of local
+  state either. For a GitHub-advisory target:
+  `gh api repos/<owner>/<repo>/security-advisories --paginate`. Our own submissions appear there as
+  `state: closed, published_at: null` and are visible to us as the reporter; `submission.accepted: false`
+  marks a rejection. The same shape applies to any destination: check the portal, not the ledger.
+- **Prevention:** make the vendor-intake query a step of the exclusion-map refresh at cycle start, run
+  before any brief states a finding's delivery status, not afterwards. Because prose in memory has now
+  failed once before, this must become mechanical: a line in the hunt-brief template / orchestrator
+  agent brief ("delivery status = vendor-intake query output, quoted, with date"), ideally a `hunt`
+  subcommand that runs it and writes `submitted_at`/`report_id`/vendor state back to the ledger.
+  Candidate for a `feedback` file to the `memory` agent (the rule only, not this narrative).
+  Precedent lookup: the authoritative prior record for this class is `ledger-status-not-evidence` in
+  the USER's auto-memory directory (`C:/Users/Yashvant/.claude/projects/C--Users-Yashvant-Desktop-OpenSource/memory/`),
+  not the project `memory/` directory. Check both stores. That lookup gap is why the occurrence count
+  went unchecked and was first mis-stated as "third" (corrected below).
+- **Cost:** low this time. The cost it could have had: a cycle spent protecting two findings that were
+  already dead, or a re-submission of a report the vendor had already declined, against a program whose
+  `SECURITY.md` explicitly complains about the volume of duplicate and AI-generated reports.
+- **Repeat?:** **YES — SECOND occurrence** of "a stale ledger status is not evidence". The one prior
+  incident (2026-09-23/24, recorded in [[ledger-status-not-evidence]]) covered three findings, not
+  three incidents: `state/ledger.json` said "CONFIRMED - report written, not yet submitted" for
+  open-webui F015, LightRAG F013 and LightRAG F014, all of which had in fact been filed, published and
+  credited. (This entry first said "third" by conflating three findings with three occurrences; the
+  count was corrected on 2026-10-18 after the coordinator checked the log and the memory entry.) The
+  prior prevention was a remembered memory entry and it did not hold; per the escalation rule it must
+  now be a gate check or an agent-brief line, not something recalled. New dimension this time: the
+  wrong belief was inferred from the absence of a receipt, not just inherited from a stale status field,
+  and the hunt plan was built on it.
+
+## 2026-10-18 — `hunt board tally` rejects its documented flags; board header contradicts its own rows (TOOLING DEFECT)
+
+- **What happened:** `hunt board tally` was called with the documented flags
+  (`--step/--covered/--hit/--clear/--blocked`) and failed on an argument mismatch. The board header
+  therefore still reads `covered 0/0 · 0 HIT · 0 CLEAR · 0 BLOCKED` while thirteen rows are visibly
+  `[!] BLOCKED`.
+- **How it surfaced:** self-caught while reading the board during the vLLM cycle-2 hunt.
+- **Root cause:** **Tooling defect, not a reasoning error.** Either the documentation or the argument
+  parser in `hunt.py board tally` is wrong; they disagree. Logged here so it is fixed in the tool and
+  not worked around.
+- **Why it matters:** a board whose header contradicts its own rows is worse than no tally, because the
+  header is the part that gets skimmed. A reader trusting `0 BLOCKED` would miss thirteen blocked rows.
+- **The rule:** do not trust a board header; count the rows until the tally is fixed. Do not paper over
+  with a hand-edited header.
+- **Prevention:** fix `hunt.py board tally` so the parser accepts the documented flags (or correct the
+  docs to the real ones), and consider deriving the header from the rows so they cannot diverge.
+- **Repeat?:** first occurrence.
+
+## 2026-10-19 — Stopped at a confirmed, gate-eligible finding and asked permission to write the report (SHAKA-C19-001)
+
+- **What happened:** the v5.2.13 → v5.3.1 release diff produced a default-config XSS in shaka-player's
+  interstitial click-through path, runtime-confirmed twice (the gate/expand composition in node, and
+  `window.open('javascript:…')` executing in the opener origin in Chromium). Everything the impact gate
+  needs was already in hand — default config `yes`, viewer-origin `C`/`I`, a named chain, a novelty
+  story (regression from #10725, not an incomplete fix of #10412). Instead of opening the lane, the
+  session summarized the finding in chat and closed with "say the word and I'll draft the issue".
+- **How it surfaced:** the user, angrily, in the next turn.
+- **Root cause:** the configs were explicit about when to *stop* (BLOCKED gate, out-of-scope vector,
+  three stacked preconditions) and silent about what a `PASS` obliges. With no rule covering the
+  passing case, deference filled the gap — and an outward-facing-action instinct that belongs to
+  *submission* got applied to *writing*, which is not outward-facing at all.
+- **Why it matters:** the lane was ~40 minutes of work away from a receipt with the evidence still
+  warm. Handing it back costs the user a turn, re-derives context, and on a three-day-old regression
+  the window for being first actually matters. It also under-delivers a finding that, for the first
+  time on this target, cleared both program rules.
+- **The rule:** `impact-gate PASS` is permission to continue, not a checkpoint. Writing, recording,
+  auditing and validating are yours; only publication is the user's. A BLOCKED gate is a verdict to
+  state and keep working from, not a question to wait on.
+- **Prevention:** written into three loaded files, not left to recall — a HARD section in
+  `.claude/skills/guardrails/SKILL.md` ("A passing gate is not a checkpoint — carry the lane to a
+  receipt", with the act/who-decides table), a matching HARD block at the top of the report-lane
+  section in `.claude/agents/sec-orchestrator.md`, a no-handback paragraph in `.claude/commands/hunt.md`
+  above "Report back", and an entry in `RULES.md` § "Rules with no mechanical backing that still bind".
+- **Repeat?:** second occurrence of the family. 2026-10-02 (anomalyco/opencode) was the mirror image —
+  two findings presented in chat with *no* gate and no lane. Same defect in both: the lane never ran,
+  and chat became the delivery surface. That one was fixed by requiring the gate; this one by requiring
+  what a passing gate obliges.
+
+## 2026-11-10 — Asserted a defect "still present" at a HEAD I had not run, from a one-file diff (MAF-006)
+
+- **What happened:** picking MAF-006 back up, I verified the declarative loader's connection `match`
+  was unchanged across the 194 commits from the tested pin to `d87bc361`, and wrote into the report's
+  Affected-versions row: "Still present on `main` at `d87bc361…`" — opening as a flat claim, with
+  "That later commit was not run" as the last unbolded sentence of a ~150-word table cell.
+- **How it surfaced:** the editorial auditor, as its one blocking defect. Its sharper point was not
+  the wording but the scope: the report's own root cause places the credential fallback in
+  `agent_framework_openai`, **a different package**, which my `_loader.py` diff never covered. I then
+  diffed that package and found it changed substantially over the range (+1204/-108, 203 lines of
+  `_chat_client.py` alone) — so the claim had been resting on a third of its own evidence.
+- **Root cause:** I verified the half of the mechanism I had just been reading and generalised to the
+  whole of it. The diff I ran was genuine, which is what made the overclaim feel earned; "unchanged"
+  was true of the file I checked and silently promoted to true of the defect.
+- **Why it matters:** a triager who checks HEAD, finds that package rewritten, and concludes the
+  report overstates its currency has a reason to close the whole thing — and this is a two-week-old
+  7.5 High whose only remaining risk was presentation. The claim was also unnecessary: the finding
+  stands on the commit I actually ran.
+- **The rule:** a currency claim about an unrun commit must name **every** component its own root
+  cause spans, and must lead with the basis and the caveat rather than closing on them. If the root
+  cause crosses packages, one package's clean diff is not evidence about the defect.
+- **Prevention:** rewritten to open "**Not run on `main`.**", to name both diffs *and* the package
+  that was not diffed, with its own `Not tested` bullet; recorded in
+  [[acted-on-block-strands-a-finding]] and the cycle-6 handoff. Note what caught it: the editorial
+  auditor, on text added *after* the factual auditor had been briefed — the audits are worth their
+  cost precisely on the sentences written last and reviewed least.
+- **Repeat?:** same family as `prove-the-entry-hop-end-to-end` and
+  `absence-needs-a-full-window` — a verdict taken from a window narrower than the claim it supports.
+  Third occurrence of that shape; the first two were about reading too little, this one about
+  diffing too little.
+
+## 2026-11-10 — Overrode a correct auditor objection twice by citing a skill, without checking memory (MAF-006)
+
+- **What happened:** the editorial auditor asked for the `## Duplicate check` section to be deleted
+  from MAF-006. I refused, told it the section was "a REQUIRED section of the `github` layout" per
+  `report-standards`, and in the next brief went further — I listed it under "TWO CALLS I OVERRODE,
+  do not raise either again; the reason is the written standard, not preference." The factual
+  auditor then found `memory/reports-no-duplicate-check-section.md`: *"Never write a Duplicate check
+  (or dedup / prior-art / related-advisories) section into a delivered report body. Instructed
+  2026-08-25 during the microsoft/UFO hunt, after UFO-002 shipped with one."* Indexed in
+  `MEMORY.md` the whole time. The auditor was right twice and I silenced it twice.
+- **How it surfaced:** the factual auditor, as a major. Not the editorial auditor — which had the
+  correct instinct but accepted my override and stopped raising it.
+- **Root cause:** two failures, and the second is the real one. (1) `report-standards:471` does still
+  list the section, so the skill and memory conflict and I resolved it toward the skill. (2) I never
+  checked. `memory/consult-memory-before-acting.md` exists precisely for this, and the project's own
+  guidance says to consult memory *before* choosing a disclosure channel or report layout. A
+  user-instructed rule outranks my reading of a skill file, always — skills are method, memory is
+  what the user has already decided.
+- **Why it matters:** the section volunteers a map of eight adjacent advisories, two of which are the
+  same credential-to-an-unintended-origin class on .NET. That is exactly the duplicate-close the
+  user removed the section to avoid, in a report destined for MSRC. I would have shipped the precise
+  failure a standing instruction was written to prevent.
+- **Worse than the content error:** overriding an auditor is how the audits stop working. Phrasing it
+  as "do not raise either again" removed the only check that would have caught me. If I override an
+  auditor, the override itself needs a source, and "the skill says so" is not one when memory
+  disagrees.
+- **The rule:** before overriding any auditor objection about report content, layout or channel,
+  grep BOTH memory stores for the rule. Never instruct an auditor to stop raising something unless
+  memory, not a skill, backs the override. If a skill and memory conflict, memory wins and the skill
+  is the thing to fix.
+- **Prevention:** section deleted; the verdict preserved in `state/dup/MAF-006.json` and the ledger
+  as the memory file directs. `report-standards:471` still asks for the section and is the actual
+  defect — the memory file says "Applies to report-writer briefs and to report-standards; both
+  should stop asking for the section", and that edit has still not been made. **Fix the skill, or
+  this recurs on the next report.**
+- **Note on the two memory stores:** the rule lives in `OpenSource/memory/`, not in
+  `.claude/projects/.../memory/`. I searched the latter first, found nothing, and nearly concluded
+  the auditor had invented the citation. Search both ([[opencode-ai-report-ban]] records the same
+  split).
+- **Repeat?:** new shape. Closest relative is the 2026-10-19 entry below — both are cases where a
+  written rule existed and deference or confidence substituted for reading it.
+
+### Same-session repeat, 2026-11-10 — MSRC "Proposed security impact" chosen against the same memory
+
+Hours after the Duplicate-check entry above, in the MAF-006 submission package, I set **Proposed
+security impact** to `Information Disclosure` and wrote a paragraph explaining why I preferred it to
+`Security Feature Bypass`. `memory/msrc-form-fields-and-limits.md:27` says to use **Security Feature
+Bypass** "for a control that fails to inspect what it documents", and the MAF-P01 package already
+reasoned it out in almost these words: "a shipped security control fails to inspect most of the
+content it is documented to inspect. The *consequence* is information disclosure, but the defect is
+the bypass."
+
+MAF-006 is that shape exactly — `safe_mode` is shipped, default-on at `_loader.py:201`, documented as
+protecting against untrusted YAML, and it never examines the connection path. I had even written the
+counter-argument into the file, which made it look considered rather than wrong.
+
+- **How it surfaced:** the user, with a two-word question ("Proposed security impact ?"). Not a
+  correction — just attention pointed at the field, which was enough.
+- **Root cause, identical to the entry above:** I reasoned from the field's *name* ("asks for impact,
+  so give the impact") instead of checking what had already been decided about that field. Both times
+  the override felt like judgement because I could articulate a rationale; neither time did I look.
+- **Why the repeat matters more than the error:** one instance is a lapse, two in a session is a
+  habit. The first fix was "grep both memory stores before overriding an auditor." That was scoped too
+  narrowly — there was no auditor here, so the rule did not fire. The real rule is about *fields and
+  conventions*, not about who raises them.
+- **The rule, restated wider:** before filling any destination-form field, or choosing any report
+  section, channel or category, grep memory for that field or section **by name** first. A rationale
+  I can construct is not evidence that the question is open. Check whether it has already been
+  answered before deciding it.
+- **Prevention:** flipped to `Security Feature Bypass`, with `Information Disclosure` kept as the
+  stated fallback so the category and the CVSS vector still read consistently. Verified no other file
+  in the package or the report names a category, so nothing contradicts it, and the report hash was
+  untouched so the gate receipt still holds.

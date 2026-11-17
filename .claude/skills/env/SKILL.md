@@ -38,3 +38,36 @@ description: >
   first — do NOT re-derive recon/identities/commit that are already cached there. For a live target
   also re-read `scope.yml` and check the **test window is still open** before sending anything; a
   window that expired since the last session is a stop, not a warning.
+- **Native sanitizer toolchain (C/C++ targets).** Verified present on this machine; the
+  `native-sanitizer` skill is the procedure, this is the inventory. Re-check with
+  `python tools/install_tools.py --check`, which reports it at the end.
+  - **MSVC 14.44.35207** at `C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC`,
+    with `clang_rt.asan_dynamic-x86_64.dll` beside `cl.exe`, and **Windows SDK 10.0.26100.0**.
+    `cl -fsanitize=address` works and its traces come out **fully symbolized** (function, file,
+    line). **This is the path for anything that becomes a report** — it is what produced the
+    AddressSanitizer output Google OSS VRP triage accepted for `FIL-001`.
+  - **WSL2 `Ubuntu-26.04`** with **clang 21.1.8**, cmake and ninja. ASAN, MSAN, TSAN, UBSAN and
+    `-fsanitize=fuzzer,address` all build. Use it for cmake/ninja projects and for a project's own
+    in-repo libFuzzer targets.
+  - **`llvm-symbolizer` is NOT installed**, so **every WSL sanitizer trace is unsymbolized** —
+    `invalid path to external symbolizer`, bare addresses, no `file:line`. `addr2line` exists and
+    ASAN does not use it. Fix with `sudo apt install llvm-21` inside WSL, or point
+    `ASAN_SYMBOLIZER_PATH` at the binary. Until then, do not build report evidence on path B.
+  - **Absent:** valgrind, gdb, AFL, honggfuzz, Atheris, jazzer.js, Docker, php/php-fpm/apache2,
+    uwsgi. Do not write a step that assumes any of them.
+  - **`gunicorn` is INSTALLED and still UNUSABLE.** `.venv/Scripts/gunicorn.exe` exists, and
+    invoking it raises `ModuleNotFoundError: No module named 'fcntl'` - `fcntl` is POSIX-only, so
+    gunicorn cannot start on Windows at all. It is listed here rather than under Absent because a
+    check that tests for the FILE passes while the lane does not work, which is the worse failure.
+  - **Worker-pool runtimes** for the cross-request state class (`state-integrity` § S2): **Node**
+    `cluster` is built in (node v24.20.0) and is **the only working shape on this machine**.
+    **Python is NOT available** - `pip install gunicorn` does not unlock it (see the fcntl note
+    above); it is already installed and still cannot run. So Python joins PHP, Java and Go: an S2
+    row on any of those targets is `NEEDS_EXTERNAL_SIGNAL`, never `CLEAR`. `dynamic/instrument.py`
+    refuses a python pool boot on win32 up front, before it looks for the executable, so the
+    refusal does not depend on gunicorn happening to be missing. To get the Python lane, run the
+    target under WSL with gunicorn installed there.
+  - **win32 scheduling trap:** Node's `cluster` default on Windows sends *every* connection to *one*
+    worker (measured: 12 sequential requests reached 1 of 4 workers). Set
+    `cluster.schedulingPolicy = cluster.SCHED_RR` to distribute (measured: 4 of 4). Raising the
+    worker count is therefore **not** a negative control for an S2 finding.

@@ -294,6 +294,33 @@ changes the quality of everything downstream.
    framework and version at the release tag (never at clone HEAD), server headers, cookie names, error-page
    shape. That fingerprint selects the stack-first sweep in step 4c and is worthless if you guess it. **Cache recon in `work/<slug>/profile.json`** so hunters
    and later sessions don't re-derive it. On resume, read that + `state/ledger.json` first.
+1b. **Build the target model — the opening pass, and it runs before any class hunter. Not optional.**
+   Load **`target-model`** and produce `work/<slug>/model.md`: the scope and lifetime map (which
+   storage lives in which scope, and which allocator or container belongs to which), the trust
+   boundaries, every abnormal exit together with **what its cleanup trusts**, the invariants those
+   imply, default-config reachability, and the state-transition view. Then the invariant table, swept
+   **invariant-first** — for each invariant, which path can leave it false — behind the relevance
+   gate, so the sweep is the structures that actually cross a boundary and not a Cartesian product.
+
+   This is the half of hunting the roster has never had. Every hunter's find step is sink-matching,
+   which works when a defect is a dangerous call with untrusted data in it and cannot reach one whose
+   essence is a *relationship* between a lifetime, an invariant and an abnormal exit.
+   `CVE-2026-109618` has no sink at all: a counter is incremented, an allocation fails, a `longjmp`
+   leaves, and the corruption happens later in a cleanup loop that trusts the counter. Pattern-based
+   detection was measured against this and cannot reach it — the two halves live in different
+   functions.
+
+   - Open it as **row 1** of the board, before the hunter rows, and close it with the validator's own
+     numbers.
+   - `hunt model-check <target>` must pass before you accept a `CLEAR` from any class hunter. It
+     checks **form only** — sections present, no blank verdict, every verdict evidenced, every
+     filtered structure justified, coverage above the floor. A PASS is not evidence the model is
+     correct; a plausible model with the lifetimes wrong passes it.
+   - Hand the finished `model.md` to every hunter you dispatch. They each read the phases their own
+     families need; re-deriving it per hunter wastes the budget and produces disagreeing models.
+   - A hunt that ends with row 1 still `[ ]` swept sinks only. Say so in the verdict — do not let the
+     class list imply coverage the hunt does not have.
+
 2. **Prior-art first — to EXCLUDE, not to emulate.** `hunt dup <owner/repo> --query "<class>"`; if the
    target has advisories, load `variant-analysis` and build the exclusion map (every published bug's
    class + root cause + fix). This defines what's already covered so hunters steer *away* from it toward
@@ -343,7 +370,7 @@ changes the quality of everything downstream.
    credentials**, and require that every verdict it returns cites a request it actually sent. Also task them to
    read code the scanners flagged nothing on — logic bugs live there. **Every hunt must cover every
    applicable row of the coverage matrix in `vuln-playbooks` § "Required coverage — the matrix"** —
-   ~89 classes in seven groups, each row tagged with the target kinds it applies to and its owner.
+   ~97 classes in eight groups, each row tagged with the target kinds it applies to and its owner.
    Assign each to its owner and require a `HIT` / `CLEAR` / `N/A` / `BLOCKED` verdict back with the
    reason **and the request that produced it**. An unexamined class is an unfinished hunt; "the scanner
    found nothing" is not a verdict, and neither is "I read the handler and it sanitizes".
@@ -373,11 +400,24 @@ changes the quality of everything downstream.
      auto-escaping gaps (`|safe`, `mark_safe`, `dangerouslySetInnerHTML`, `v-html`), sanitizer config
      holes and mXSS, markdown/SVG/PDF renderers, `.svg`/`.html` served from the app origin, CSP as the
      only defense → **xss-hunter** (execution proved in a browser; a reflection is not a finding)
-   - **resource exhaustion & memory safety** — ReDoS, quadratic algorithms, decompression/expansion
+   - **resource exhaustion** — ReDoS, quadratic algorithms, decompression/expansion
      bombs, unbounded allocation from a declared size, **sync CPU work on an async event loop**,
      unbounded recursion and **stored cycles**, unbounded fan-out, and **OOB index/length math into
      native or GPU code** → **resource-dos-hunter** (runs its four-point scope gate first; no
      availability testing on a live host, ever)
+   - **state integrity & memory safety** — the family where an operation fails or ends but leaves
+     state behind that later code trusts. **Error-path state corruption** (an exception, bailout, OOM
+     or cancellation leaves a structure, object or security context half-updated and cleanup trusts
+     it; a counter incremented before a fallible allocation) and **cross-request state reuse** (a
+     module global, pooled worker, `sync.Pool` entry, thread-local or async context retains one
+     request's data or **authorization context** and the next identity reads it), plus the native
+     instances — **use-after-free, uninitialised read, double free, counter/length desync** →
+     **state-integrity-hunter** (group H; every language, not just C/C++; runs its four-point scope
+     gate first — a correctly-isolated cache is not a finding. ASAN is blind to uninitialised-state
+     defects, so a sanitizer mismatch is `BLOCKED (wrong instrumentation)`, never `CLEAR`. On a live
+     host it reproduces locally and never churns workers.) This bullet used to be titled "resource
+     exhaustion **& memory safety**" while listing only exhaustion shapes — a label claiming coverage
+     the pipeline did not have. It has an owner now.
    - **AI/LLM-native taint + unclaimed sinks** — prompt injection (direct and indirect via retrieved
      content), insecure output handling, model & dataset supply chain, any source→sink flow with no
      dedicated owner, and a re-walk of a class you want a second opinion on → **injection-hunter**
@@ -455,8 +495,9 @@ changes the quality of everything downstream.
    **Wave mode (fallback).** Use it when no swarm plan exists, or the limiter is degraded and you
    must proceed anyway.
 
-   **Ten hunters exist; do not spawn ten at once.** The roster is web-recon, authz-logic, authn-crypto,
-   rce-exec, server-side, datastore, xss, client-side, resource-dos, injection. Running them all in
+   **Eleven hunters exist; do not spawn eleven at once.** The roster is web-recon, authz-logic,
+   authn-crypto, rce-exec, server-side, datastore, xss, client-side, resource-dos, injection,
+   state-integrity. Running them all in
    parallel has already killed a hunt on provider rate limits, so sequence them in **waves**, put every
    one on the board in `[ ]` from the start, and reprint the board as each wave lands:
 
@@ -464,8 +505,10 @@ changes the quality of everything downstream.
    - **wave 1** — the classes most likely to carry a critical, given the fingerprint: usually
      rce-exec + server-side + authz-logic.
    - **wave 2** — datastore + authn-crypto + xss.
-   - **wave 3** — client-side + resource-dos + injection (AI-native + the re-walks), plus anything
-     wave 1–2 handed sideways.
+   - **wave 3** — client-side + resource-dos + injection (AI-native + the re-walks) +
+     **state-integrity** (group H; it needs the identities and the instance that waves 1–2 have
+     already stood up, and its S2 differential reuses the authz harness), plus anything wave 1–2
+     handed sideways.
 
    **dynamic-prover runs alongside every wave**, not as a wave of its own. The class hunters read
    source and hand it leads; it owns the runtime loop — aim, run, read the verdict as a claim about
@@ -648,13 +691,41 @@ in isolation. A hunter that reports the fixture CLEAR on path traversal because 
 failed the depth requirement, not passed it. Rediscovering fewer classes than the fixture seeds means the
 prompts regressed; fix them before trusting or delivering a real finding. (Fixture deps: `flask`, `PyJWT`.)
 
+## Once the gate passes, the lane runs to a receipt — you do not come back to ask (HARD)
+
+The scope sentence below and `hunt impact-gate` are the *only* questions that decide whether a lane
+opens, and you answer both yourself from the code. A `PASS` means **task `report-writer` now**, in
+this session: report written, runs recorded, both audits dispatched and their artifacts verified on
+disk, `hunt validate-report` green. Reporting a confirmed finding in chat and offering to write it up
+is a half-finished lane, not a result; it has happened here on a default-config XSS that was already
+proven in the target's own test harness, with every gate input in hand.
+
+The only thing the user decides is **publication** — VRP intake, a draft advisory, an upstream issue.
+Stop at the finished, audited bytes and say which channel and what it would say. Everything before
+that is your job. A BLOCKED gate is likewise a verdict you report and keep moving from, not a question
+you wait on: name the blocker, name the ceiling, then pick up the next uncovered row rather than
+handing the whole board back.
+
 ## HARD GATE — resolve scope BEFORE opening a report lane
 
 Before tasking `report-writer`, state in one sentence which clause of the destination programme's
 INCLUSION text this finding satisfies. Never infer in-scope from the absence of an exclusion.
 
-For Google OSS VRP the qualifying definition is a vulnerability "substantially affecting the
-confidentiality or integrity of user data". Availability is not in it. So:
+**Google OSS VRP closed to product vulnerabilities on 2026-10-01.** Supply chain only — source or
+build integrity: branch write, Actions/CI configuration, release infrastructure, signing keys,
+package-manager credentials, and a defect that needs a maintainer to approve a PR is "Credit" at best.
+For **any product defect** in a Google OSS repo — XSS, traversal, authz, parser memory corruption, all
+of it — there is **no VRP lane to open**, whatever the vector says. `SHAKA-C19-001` proved it the
+expensive way: a default-config XSS with a gate receipt and a PoC bundle, filed 2026-10-19, closed
+out of scope on the date rule while triage agreed it *was* a product vulnerability. Its ceiling is the
+upstream repo — a private advisory on the project's security page, a public issue, or a merged PR.
+Patch Rewards is not a general fallback: its scope is `patch-rewards-program/scope.md` plus
+OSS-Fuzz-integrated projects, and shaka-player is in neither. Cloud-tied repos go to Cloud VRP,
+AI-tied to AI VRP. Full detail and the verbatim rule text: `programs/google-oss-vrp.md` § "CLOSED TO
+PRODUCT VULNERABILITIES".
+
+For a program that *is* open, state the inclusion clause and apply its impact definition. Where that
+definition names confidentiality and integrity of user data only (as OSS VRP's did):
 
 * `C:N` and `I:N` in the vector → **no report lane.** The ceiling is an upstream GitHub issue. Say so
   to the user and let them decide; do not spend the lane. Three findings on one target were taken to a

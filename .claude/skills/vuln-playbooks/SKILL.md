@@ -47,11 +47,28 @@ For `url` and `grey`, read `disclosure-ethics` **first** and verify the scope be
 
 ## Required coverage — the matrix (sweep every applicable row, say why any is N/A)
 
-No hunt is complete until each applicable row has been *looked for* on the target's real surface. Mark
-each `HIT` (lead found) / `CLEAR` (surface exists, checked, defended — say what defends it) / `N/A`
-(surface doesn't exist — say why) / `BLOCKED` (surface exists but scope, rate, WAF or missing credentials
-prevented the test — say which, and what would unblock it). "Didn't look" is not an allowed state; an
-unexamined class is an unfinished hunt. `BLOCKED` is not a failure — silently reporting it as `CLEAR` is.
+No hunt is complete until each applicable row has been *looked for* on the target's real surface.
+
+**The verdict vocabulary is `dynamic/verdict.py`'s `State` enum — not this prose.** It is the source of
+truth, it is enforced in code (`CLEAR` can only be built by `cleared()` with a guard *and* an attack
+named), and `verdict.py:_LEGACY` parses every word below. Four of these used to be missing from this
+legend, which left a hunter with nowhere to record "I attacked and saw nothing" except `CLEAR` — the
+absorption this table exists to stop:
+
+| Verdict | Means |
+|---|---|
+| `UNTESTED` | Nothing sent, nothing read. **The starting state of every row**, including a row whose owner exists but has not run yet. Owned is not tested. |
+| `N/A` | The surface does not exist here. Say why — "no upload endpoint", never bare "n/a". |
+| `BLOCKED` | The surface exists and could not be tested: scope refusal, rate, WAF, missing credentials, **a tool or sanitizer that is not installed**. Say what stopped you and what would unblock it. |
+| `NEEDS_EXTERNAL_SIGNAL` | Testable only through a channel we do not have — a real browser, a reachable out-of-band callback, a runtime we cannot boot, a human. The probe was **not** sent. Distinct from `BLOCKED`: the blocker is a missing capability, not a refusal. |
+| `NOT_CONFIRMED` | **The attack was sent and nothing came back.** This is *not* defended: the payload may be wrong, the callback egress-filtered, the timing masked. It is the honest verdict for every probe that fires blank. |
+| `CLEAR` | The attack was sent, a guard was observed rejecting it, **and both can be named**. The only verdict that licenses "this class is defended here". |
+| `LEAD` | A signal worth pursuing that does not meet the confirmation bar — a scanner match, a suspicious differential. Never reportable alone. |
+| `HIT` / `CONFIRMED` | The bug is real and the evidence field says how we know. `HIT` is the historic word for `CONFIRMED` with runtime evidence; `code-confirmed` is `CONFIRMED` on a source read alone. |
+
+"Didn't look" is not an allowed state; an unexamined class is an unfinished hunt. `BLOCKED`,
+`NOT_CONFIRMED` and `NEEDS_EXTERNAL_SIGNAL` are not failures — **silently reporting any of them as
+`CLEAR` is.** Only `CLEAR` and `N/A` close a row; the rest are followed up (`State.needs_followup()`).
 
 Playbook § names without a prefix are in this file; `web:` means the `web-playbooks` skill.
 
@@ -172,6 +189,25 @@ Playbook § names without a prefix are in this file; `web:` means the `web-playb
 | Secrets leaking into LLM execution data | Secrets exposure through APIs | both | authn-crypto |
 | Model / training-data supply chain | AI/LLM-native | src | injection |
 | Vector & embedding weaknesses (RAG store) | Vector & embedding weaknesses | both | authz-logic |
+
+### H. State integrity
+
+The family where an operation fails or ends but leaves state behind that later code trusts. Playbook
+is the `state-integrity` skill throughout; native proof technique is `native-sanitizer`.
+
+| Class | Playbook § | Kind | Owner |
+|-------|-----------|------|-------|
+| Error-path state corruption (exception/bailout/OOM) | `state-integrity` § S1 | both | state-integrity |
+| Cross-request state reuse / tenant bleed | `state-integrity` § S2 | both | state-integrity |
+| Stale authorization or identity context across requests | `state-integrity` § S2 | both | state-integrity |
+| Pooled object / worker reuse without reset | `state-integrity` § S2 | both | state-integrity |
+| Thread-local / async-context bleed | `state-integrity` § S2 | both | state-integrity |
+| Use-after-free, uninitialised read, double free | `native-sanitizer` | src | state-integrity |
+| Container counter / length desync | `state-integrity` § S1 | src | state-integrity |
+
+The `OOB index / length math into native or GPU code` row in group F stays with `resource-dos` — it is
+reached from a caller's bad bounds rather than from a broken invariant. If the index is wrong *because*
+an abort left a count wrong, it is this group.
 
 Two sweeps, not one. The rows above are class-first. Once the stack is fingerprinted, run the
 stack-first sweep in `stack-playbooks` as well — a class sweep does not think to ask for

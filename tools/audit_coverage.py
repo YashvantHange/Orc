@@ -38,6 +38,11 @@ RECON = "web-recon stage"
 BROWSER = "browser stage"
 STATIC = "static read (src)"
 STRUCTURAL = "structural (own procedure)"
+# The opening pass: `target-model`'s invariant sweep, validated by `hunt model-check`. Distinct
+# from STATIC on purpose - "static read" says a human looked at the source, which is what these two
+# rows were credited to before and is not a procedure. MODEL says a specific, checkable artifact
+# settles them: an evidenced row in work/<slug>/model.md's invariant table.
+MODEL = "target-model pass"
 
 # Matrix row -> what settles it. A primitive name, a MANUAL_ROWS key, or one of the stages above.
 # "" means NOTHING settles it: the row is in the matrix and unreachable.
@@ -145,9 +150,25 @@ COVERS = {
     "Secrets leaking into LLM execution data": "",
     "Model / training-data supply chain": STATIC,
     "Vector & embedding weaknesses (RAG store)": "Vector & embedding weaknesses (RAG)",
+
+    # H. State integrity
+    # The five `both` rows are settled by the state-integrity-hunter through the two-identity
+    # differential, so they carry MANUAL_ROWS keys and print as outstanding on every web sweep
+    # until it returns verdicts. The two `src`-only rows are unreachable from an HTTP sweep and
+    # are settled by the source read plus a sanitizer build, same as the group F native row.
+    "Error-path state corruption (exception/bailout/OOM)": "Error-path state corruption",
+    "Cross-request state reuse / tenant bleed": "Cross-request state reuse",
+    "Stale authorization or identity context across requests": "Stale authorization context",
+    "Pooled object / worker reuse without reset": "Pooled object reuse without reset",
+    "Thread-local / async-context bleed": "Thread-local / async-context bleed",
+    # These two are the S1 native rows, and they are the ones CVE-2026-109618 lives in. They used
+    # to point at STATIC - "a human read the source" - which is not a procedure and cannot be
+    # checked. They are now settled by the opening pass's invariant table plus a sanitizer build.
+    "Use-after-free, uninitialised read, double free": MODEL,
+    "Container counter / length desync": MODEL,
 }
 
-STAGES = {RECON, BROWSER, STATIC, STRUCTURAL}
+STAGES = {RECON, BROWSER, STATIC, STRUCTURAL, MODEL}
 
 # Rows deliberately left unreachable, with the reason. Availability findings score C:N/I:N and do
 # not qualify on the programs this pipeline targets, so a probe for them would generate work that

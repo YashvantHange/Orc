@@ -31,7 +31,9 @@ What counts as checking, per kind of claim:
 | Claim | What makes it known |
 |---|---|
 | "The code does X" | You opened the file **at the pinned commit** and read the lines. Not "I read a similar file", not "this framework usually…". |
-| "It's exploitable" | You traced it in the code **and** sent the request against a running instance and saw the impact. The trace alone is `code-confirmed` — necessary, not sufficient (`dynamic-hunt`). |
+| "It's exploitable" | You traced it in the code **and** sent the request against a running instance and saw the impact. The trace alone is `code-confirmed` — necessary, not sufficient (`dynamic-hunt`). For a target that cannot be booted at all (C/C++), delivering the input to a sanitizer-built faithful harness of the real sources is `sanitizer-confirmed`, which ranks with runtime — see `dynamic-hunt` §3b. |
+| "The class is covered because a tool for it exists" | No. Coverage needs a named class, a designated owner, a detection strategy, a stated confirmation bar, and a verdict with evidence. An installed sanitizer, another hunter's passing mention, a scanner that ran, or a scan that completed without errors are none of those. A class nobody owns is not `CLEAR` — it is absent, and absence is what this table exists to stop. |
+| "The sanitizer found nothing, so there is no bug" | Only if it was the **right** sanitizer. ASAN is silent on an in-bounds read of uninitialised memory; MSAN reports it. Wrong instrumentation is `BLOCKED (wrong instrumentation)`, and a missing sanitizer is `BLOCKED` naming it. |
 | "It's defended / CLEAR" | You read the guard **and** sent the attack and watched it get rejected, and you can name the defense. Either half alone doesn't close the class. |
 | "Version A is affected" | It appears in a recorded `pip freeze` / lockfile you captured. Never inferred from a changelog or a tag name. |
 | "This is novel" | Run through the exclusion map (`variant-analysis`) + `hunt dup`. Absence of memory is not absence of a CVE. |
@@ -106,6 +108,43 @@ A guardrail is not a step you may decide is already satisfied.
   `pre_submit.py` ignores waivers by design.
 - **Report the guardrail state honestly in your summary**: what was gated, what was waived, what was
   `BLOCKED`, and what you could not verify.
+
+## A passing gate is not a checkpoint — carry the lane to a receipt (HARD)
+
+A gate that returns `PASS` is permission to continue, not an invitation to come back and ask. When a
+lead is runtime-confirmed and `hunt impact-gate` passes, the deliverable is a **gate-passing report**,
+and it is produced in the same session, without pausing to ask whether it should be. "Found it, here
+are the lines, say the word and I'll write it up" is a half-finished lane presented as a result, and
+it has happened on this pipeline with a confirmed default-config XSS already proven in the product's
+own test harness.
+
+The line is **drafting versus publishing**, not finding versus writing:
+
+| Act | Who decides |
+|---|---|
+| Opening the lane after `impact-gate PASS`, writing the report, recording runs, running both audits, `hunt validate-report` | **You.** Do it. No question is owed first. |
+| Pressing submit — VRP intake, a draft advisory, an upstream issue, any post, any email | **The user.** Always. Stop there, with the finished bytes in hand. |
+
+So the correct stopping point is "the report is written, audited and holds a receipt; here is the
+channel and here is what submitting it would say" — never "I found something; shall I write it?".
+
+**Two things that do not license a pause.** A BLOCKED gate is a *verdict to report*, not a question —
+state the blocker, the record behind it, and what the ceiling is (usually an upstream issue), and then
+keep working on whatever else is in scope.
+
+**And a blocked gate still owes the user bytes.** If the defect is real, write the upstream-issue
+draft to `work/<slug>/upstream-issue-<short-name>.md` without being asked — the same no-question-owed
+rule that makes a PASS produce a finished report. The row above says submitting an upstream issue is
+the user's call; it never said *writing* it was. Leaving someone a blocker and nothing to act on
+throws away the hunt that found it. `report-craft` § 0b has the required shape, and the hard part is
+the honesty: it must say in those words that it is **not** a disclosure report, and it must state
+what was not demonstrated — no build, no sanitizer, consequence reasoned rather than observed. And an unanswered side question (which browser, which
+sibling parser, whether a second sink is also reachable) goes in `Not tested`; it never holds up the
+report.
+
+**What to do with the rest of the hunt.** Finishing one lane does not end the session. Rows named as
+uncovered stay uncovered until they are swept or explicitly recorded as `BLOCKED (untested)` — closing
+a lane is the moment to pick the next row up, not to hand everything back.
 
 ## Dispatch is not completion — verify the artifact, not the notification
 

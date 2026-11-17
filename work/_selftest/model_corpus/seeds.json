@@ -1,0 +1,69 @@
+{
+  "_comment": "The five-fixture corpus for the opening pass (`target-model`). One real defect and four ways of being safe. tests/test_model_corpus.py reads this; keep it in sync. The GRADING KEY is deliberately elsewhere: tests/data/model_corpus_reference.json - a hunter reads its target and must not read the answer.",
+  "abnormal_exit": {
+    "mechanism": "longjmp",
+    "file": "arena.c",
+    "symbol": "arena_alloc",
+    "note": "arena_alloc never returns NULL; it longjmps. A checked-return fixture would not exercise this defect class at all - the failure has to abandon the caller mid-statement, like zend_bailout."
+  },
+  "fixtures": [
+    {
+      "id": "A-counter-before-fallible-alloc",
+      "file": "a_vulnerable.c",
+      "is_vulnerable": true,
+      "class": "error-path state corruption (S1)",
+      "cwe": "CWE-824",
+      "shape_of": "CVE-2026-109618",
+      "mutation": {"symbol": "table_insert", "marker": "size_t i = t->nNumUsed++;"},
+      "interrupt": {"symbol": "arena_strdup", "marker": "longjmp"},
+      "consumer": {"symbol": "table_destroy", "marker": "for (size_t i = 0; i < t->nNumUsed; i++)"},
+      "expect": "FOUND",
+      "evidence": "evil run (oom_after=2) faults in table_destroy; benign run (oom_after=99) exits 0",
+      "note": "No dangerous sink exists in this file. The defect is the relationship between the increment, the non-local exit, and the walk - three places, two functions."
+    },
+    {
+      "id": "B-patched",
+      "file": "b_patched.c",
+      "is_vulnerable": false,
+      "expect": "NOT REPORTED",
+      "defense": "the fallible call happens into a local; the counter commits last",
+      "defense_marker": "t->nNumUsed = i + 1;",
+      "catches": "a method that points at a famous function rather than at a defect"
+    },
+    {
+      "id": "C-suspicious-but-safe",
+      "file": "c_suspicious.c",
+      "is_vulnerable": false,
+      "expect": "NOT REPORTED",
+      "defense": "inline per-slot key storage sized at init: no allocation between the increment and the whole slot, so the exit has no window to land in",
+      "defense_marker": "char key[KEYMAX];",
+      "catches": "a method that matched the SHAPE without asking whether the interrupt can occur in that window. Every token a pattern keys on is present here."
+    },
+    {
+      "id": "D-interrupted-but-rolled-back",
+      "file": "d_rolledback.c",
+      "is_vulnerable": false,
+      "expect": "NOT REPORTED",
+      "defense": "the bailout handler un-counts the half-inserted slot before anything reads it",
+      "defense_marker": "t->nNumUsed = t->committed;",
+      "catches": "a method that found the window and stopped one question early - who repairs this? The answer is in a different function."
+    },
+    {
+      "id": "E-cross-scope-but-cleared",
+      "file": "e_crossscope.c",
+      "is_vulnerable": false,
+      "class": "cross-request state reuse (S2)",
+      "shape_of": "CVE-2026-109619",
+      "expect": "NOT REPORTED",
+      "defense": "the global is nulled in the request-shutdown path, before the arena it pointed into is reset",
+      "defense_marker": "MG(last_upload_name) = NULL;",
+      "catches": "a method that read the assignment and never opened the shutdown path. The absence of a store is not visible where the store would be.",
+      "second_trap": "request_count is a global written during a request and is CORRECTLY process-scoped. Flagging it confuses 'a global written during a request' with 'a global holding request-scoped data'."
+    }
+  ],
+  "sanitizer": {
+    "built_with": "MSVC 14.44.35207 -fsanitize=address",
+    "a_reports": "access-violation on a 0xBEBEBEBE pointer in table_destroy",
+    "caveat": "ASAN faults here only because the uninitialised garbage is unmapped. The defect is an UNINITIALISED READ and MSAN is what names it; a class swept under ASAN alone is BLOCKED (wrong instrumentation), never CLEAR. See native-sanitizer."
+  }
+}

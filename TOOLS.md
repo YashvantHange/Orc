@@ -14,6 +14,13 @@ python tools/install_tools.py --check
 | git | yes | clones targets, pins the commit cited in evidence |
 | Node.js + npm | JS/TS targets only | `npm audit`, and booting JS targets |
 | GitHub CLI (`gh`) | no | stars/activity/advisory counts for target ranking |
+| MSVC + Windows SDK | C/C++ targets only | `cl -fsanitize=address` — the **symbolized** ASAN path, and the one report evidence is built on (`native-sanitizer` skill) |
+| WSL2 + clang/cmake/ninja | C/C++ targets only | ASAN/MSAN/TSAN/UBSAN and `-fsanitize=fuzzer`; cmake projects and in-repo libFuzzer targets |
+| `llvm-symbolizer` (in WSL) | C/C++ targets only | **without it every WSL sanitizer trace is bare addresses** — `apt install llvm-21` |
+| Node `cluster` | cross-request state class | two requests on one pooled worker, for `state-integrity` § S2. Built in, and **the only working pool runtime here**. **gunicorn is installed but cannot run on Windows** (`fcntl` is POSIX-only), so the Python lane is `NEEDS_EXTERNAL_SIGNAL`, not a `pip install` away; `instrument.py` refuses it up front on win32 |
+
+`--check` reports the native toolchain and says plainly when the symbolizer is missing. Nothing in
+this pipeline installs a compiler — detection only.
 
 ## Installed by `tools/install_tools.py`
 

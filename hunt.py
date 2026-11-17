@@ -6,6 +6,10 @@ REASONING, not on shelling out a dozen scripts. Every subcommand reuses the exis
 is derived once and reused across agents/sessions.
 
   hunt.py scope --file scope.yml [--lint|--check <url>|--selftest]   authorization gate for a live host
+  hunt.py model-check <target> | --template   the OPENING pass: is work/<slug>/model.md finished
+                                              and evidenced? (target-model; form only)
+  hunt.py exam <target> --reference <key>   measure the method: integrity gate -> model-check ->
+                                           score, recorded to work/<slug>/exam/result.json
   hunt.py scan <src>                       static -> merge -> exploit_score (ranked findings.json)
   hunt.py sweep <target> [--authz a.json] [--fuzz ep:param]   boot ONCE, probe+authz+fuzz
   hunt.py probe --url <base> --primitive <p> --endpoint <ep> [--param x]   one primitive, real endpoint
@@ -203,9 +207,73 @@ def cmd_scan(a) -> int:
     _run([PY, str(ROOT / "correlate" / "exploit_score.py"), src,
           "--threshold", str(a.threshold)])
     findings = _workdir(src) / "findings.json"
-    save_profile(src, findings=str(findings))
+    # Carry the static layer's own honesty flag into the profile, so a later agent reading the
+    # profile cannot mistake "0 findings" for "clean" on a tree no scanner here can parse.
+    extra_prof: dict = {}
+    cov_path = _workdir(src) / "scan" / "language-coverage.json"
+    if cov_path.exists():
+        try:
+            cov = json.loads(cov_path.read_text(encoding="utf-8"))
+            extra_prof["static_coverage"] = cov.get("static_coverage")
+            extra_prof["unsupported_languages"] = cov.get("unsupported_languages") or []
+        except (OSError, ValueError):
+            pass
+    save_profile(src, findings=str(findings), **extra_prof)
+    if extra_prof.get("unsupported_languages"):
+        print(f"\nstatic_coverage={extra_prof['static_coverage']} — not read by any engine: "
+              f"{', '.join(extra_prof['unsupported_languages'])}")
     print(f"\nranked leads -> {findings}")
     return 0
+
+
+# ------------------------------------------------------------------- target model ----
+def cmd_exam(a) -> int:
+    """Run a capability exam and WRITE IT DOWN.
+
+    The integrity gate runs first because it is the only stage whose answer can invalidate the
+    other two. Exit 3 means the target was compromised: the model may still be excellent, but the
+    run is not evidence the method can FIND anything.
+    """
+    return _run([PY, str(ROOT / "tools" / "exam_run.py"), a.target,
+                 "--reference", a.reference,
+                 "--min-coverage", str(a.min_coverage), "--min-rows", str(a.min_rows)])
+
+
+def cmd_model_check(a) -> int:
+    """Validate the opening pass's artifact — `target-model`'s work/<slug>/model.md.
+
+    Form only, on purpose: it proves the model pass RAN and was finished, never that the model is
+    correct. Substance is the agent's job and the blind exam's measurement.
+    """
+    args = [PY, str(ROOT / "tools" / "model_check.py")]
+    if a.template:
+        return _run(args + ["--template"])
+    if not a.target:
+        print("pass a target, or --template to print the skeleton", file=sys.stderr)
+        return 2
+    args += [a.target, "--min-coverage", str(a.min_coverage), "--min-rows", str(a.min_rows)]
+    return _run(args)
+
+
+# ---------------------------------------------------------------- state integrity ----
+def cmd_state_diff(a) -> int:
+    """Cross-request state-reuse differential — `state-integrity` § S2, CVE-2026-109619's shape."""
+    args = [PY, str(ROOT / "dynamic" / "state_diff.py")]
+    if a.selftest:
+        return _run(args + ["--selftest"])
+    if not (a.launch or a.url):
+        print("pass --selftest, --launch <dir>, or --url <base> (+ --scope)", file=sys.stderr)
+        return 2
+    for flag, val in (("--launch", a.launch), ("--url", a.url), ("--scope", a.scope),
+                      ("--probe", a.probe), ("--identity-a", a.identity_a),
+                      ("--marker-field", a.marker_field), ("--worker-path", a.worker_path),
+                      ("--worker-field", a.worker_field), ("--policy", a.policy),
+                      ("--attempts", a.attempts), ("--workers", a.workers)):
+        if val not in (None, ""):
+            args += [flag, str(val)]
+    if a.no_keep_alive:
+        args.append("--no-keep-alive")
+    return _run(args)
 
 
 # --------------------------------------------------------------------------- sweep ----
@@ -774,7 +842,8 @@ _TITLE_MAX_WORDS = 10          # report-standards "Title rule"; 12 is the hard c
 # A title with none of these reads like a refactor-PR subject ("Quadratic image regex in the parser").
 # Advisory only, and deliberately wide - a miss costs nothing, a false flag costs an audit round.
 _TITLE_SECURITY_TERMS = (
-    r"xss|csrf|ssrf|xxe|rce|redos|dos\b|denial of service|idor|bola|bfla|ssti|csti|sqli|"
+    r"xss|cross[- ]site scripting|cross[- ]site request forgery|csrf|ssrf|xxe|rce|"
+    r"remote code execution|redos|dos\b|denial of service|idor|bola|bfla|ssti|csti|sqli|"
     r"injection|traversal|deserializ|prototype pollution|smuggl|poisoning|takeover|hijack|"
     r"spoof|forgery|clickjack|rebinding|open redirect|"
     r"bypass|unauthenticated|unauthorized|unauth\b|missing (?:auth|permission|access|validation)|"
@@ -1199,6 +1268,45 @@ def main() -> int:
     w.add_argument("target", help="workdir slug, origin, or source path")
     p.set_defaults(fn=cmd_web)
 
+    p = sub.add_parser("exam",
+                       help="run a capability exam end to end and record it: integrity gate -> "
+                            "model-check -> score, written to work/<slug>/exam/result.json")
+    p.add_argument("target")
+    p.add_argument("--reference", required=True,
+                   help="the held-out grading key (tests/data/*_reference.json)")
+    p.add_argument("--min-coverage", type=float, default=80.0)
+    p.add_argument("--min-rows", type=int, default=1)
+    p.set_defaults(fn=cmd_exam)
+
+    p = sub.add_parser("model-check",
+                       help="validate the opening pass: does work/<slug>/model.md exist and is the "
+                            "invariant sweep finished and evidenced? (target-model)")
+    p.add_argument("target", nargs="?")
+    p.add_argument("--template", action="store_true", help="print the model.md skeleton")
+    p.add_argument("--min-coverage", type=float, default=80.0,
+                   help="search-space coverage floor; below it the hunt is UNTESTED, not CLEAR")
+    p.add_argument("--min-rows", type=int, default=1)
+    p.set_defaults(fn=cmd_model_check)
+
+    p = sub.add_parser("state-diff",
+                       help="cross-request state-reuse differential (state-integrity S2): does "
+                            "identity B receive identity A's state from the same pooled worker?")
+    p.add_argument("--launch", help="local target dir to boot under a worker pool")
+    p.add_argument("--url"); p.add_argument("--scope")
+    p.add_argument("--probe", default="/whoami")
+    p.add_argument("--identity-a", default="alice")
+    p.add_argument("--marker-field", default="identity")
+    p.add_argument("--worker-path", default="/worker")
+    p.add_argument("--worker-field", default="pid")
+    p.add_argument("--attempts", type=int, default=10)
+    p.add_argument("--workers", type=int, default=1)
+    p.add_argument("--policy", choices=("rr", "none"), default="none",
+                   help="'rr' forces round-robin — use it for the CONTROL; adding workers alone "
+                        "does NOT distribute requests (win32 pins them all to one)")
+    p.add_argument("--no-keep-alive", action="store_true")
+    p.add_argument("--selftest", action="store_true")
+    p.set_defaults(fn=cmd_state_diff)
+
     p = sub.add_parser("authz-scaffold")
     p.add_argument("src", nargs="?", help="local source tree (omit when using --url)")
     p.add_argument("--url", help="derive from work/<slug>/web/endpoints.json instead")
@@ -1289,6 +1397,13 @@ def main() -> int:
     b.add_argument("target"); b.add_argument("--covered"); b.add_argument("--step")
     b.add_argument("--hit", type=int); b.add_argument("--clear", type=int)
     b.add_argument("--blocked", type=int)
+    # Mirror dynamic/verdict.py's State enum: a verdict with no counter gets absorbed into CLEAR.
+    b.add_argument("--not-confirmed", type=int, dest="not_confirmed",
+                   help="rows where the attack was sent and nothing came back (NOT defended)")
+    b.add_argument("--needs-signal", type=int, dest="needs_signal",
+                   help="rows needing a channel we lack (browser, OOB callback, a runtime)")
+    b.add_argument("--untested", type=int,
+                   help="rows owned but not yet exercised — owned is not tested")
     b.add_argument("--confirmed", action="append", default=[], help="finding id, repeatable")
     b.set_defaults(board_fn=lambda a: B.cmd_tally(a))
 

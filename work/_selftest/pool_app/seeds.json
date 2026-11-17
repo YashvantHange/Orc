@@ -1,0 +1,37 @@
+{
+  "fixture": "pool_app",
+  "purpose": "known-positive and known-negative for the cross-request state-reuse class (state-integrity S2)",
+  "runtime": "node cluster; honours WORKERS and CLUSTER_SCHED_POLICY from instrument.py's pool shape",
+  "seeds": [
+    {
+      "id": "s2-identity-bleed",
+      "class": "cross-request state reuse",
+      "cwe": "CWE-488",
+      "where": "server.js worker scope, `lastIdentity`",
+      "endpoint": "/whoami",
+      "expect": "CONFIRMED",
+      "how": "identity A requests /whoami with Authorization: Bearer alice, then an UNAUTHENTICATED request to /whoami on the same worker returns identity 'alice'",
+      "why": "module scope has worker lifetime and is never cleared at request end - the CVE-2026-109619 shape in a managed language"
+    },
+    {
+      "id": "s2-negative-control",
+      "class": "cross-request state reuse",
+      "where": "server.js worker scope, `perIdentity`",
+      "endpoint": "/note",
+      "expect": "CLEAR",
+      "how": "identity A writes ?note=..., then an unauthenticated request to /note returns null",
+      "why": "same shape, keyed per identity and read only with that identity's own key. A run that reports this is producing false positives - a correctly isolated cache is not a finding"
+    }
+  ],
+  "worker_identification": {
+    "endpoint": "/worker",
+    "returns": ["pid", "workers", "policy"],
+    "note": "a probe must state WHICH worker served each request; same-worker is a precondition, not an assumption"
+  },
+  "distribution_trap": {
+    "measured_on": "win32, node v24.20.0",
+    "default_policy": "12 sequential requests reached 1 of 4 workers - total affinity",
+    "sched_rr": "12 sequential requests reached 4 of 4 workers - perfect round-robin",
+    "consequence": "raising WORKERS is NOT a negative control. The control must set CLUSTER_SCHED_POLICY=rr."
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "results": [
+    {
+      "label": "positive /whoami",
+      "probe": "/whoami",
+      "verdict": "CONFIRMED",
+      "reason": "an unauthenticated request to /whoami received identity 'alice' written by the previous request on the same worker (6/6 attempts, 6/6 landed on one worker; distribution=1 worker, platform default)",
+      "worker_identification": "/worker -> pid",
+      "connection_reuse": true,
+      "distribution_mechanism": "1 worker, platform default",
+      "attempts": 6,
+      "observations": 6,
+      "rate": "6/6",
+      "control": "see the forced-distribution run below",
+      "same_worker_attempts": 6,
+      "leaked_values": [
+        "alice"
+      ],
+      "marker": "alice"
+    },
+    {
+      "label": "isolated-cache control /note",
+      "probe": "/note",
+      "verdict": "NOT_CONFIRMED",
+      "reason": "attack sent 6x and nothing came back. NOT the same as defended: 6/6 attempts even landed on one worker (distribution=1 worker, platform default).",
+      "worker_identification": "/worker -> pid",
+      "connection_reuse": true,
+      "distribution_mechanism": "1 worker, platform default",
+      "attempts": 6,
+      "observations": 0,
+      "rate": "0/6",
+      "control": "",
+      "same_worker_attempts": 6,
+      "leaked_values": [],
+      "marker": "alice"
+    },
+    {
+      "label": "forced-distribution control /whoami",
+      "probe": "/whoami",
+      "verdict": "NOT_CONFIRMED",
+      "reason": "attack sent 8x and nothing came back. NOT the same as defended: 0/8 attempts even landed on one worker (distribution=4 workers, cluster.SCHED_RR (forced round-robin)).",
+      "worker_identification": "/worker -> pid",
+      "connection_reuse": false,
+      "distribution_mechanism": "4 workers, cluster.SCHED_RR (forced round-robin)",
+      "attempts": 8,
+      "observations": 0,
+      "rate": "0/8",
+      "control": "",
+      "same_worker_attempts": 0,
+      "leaked_values": [],
+      "marker": "alice"
+    }
+  ]
+}

@@ -37,11 +37,31 @@ def _venv_python(venv: Path) -> Path:
     return venv / ("Scripts" if IS_WINDOWS else "bin") / ("python.exe" if IS_WINDOWS else "python")
 
 
+class PoolUnavailable(RuntimeError):
+    """No worker-pool runtime for this target's language.
+
+    Raised rather than silently falling back to a single process, because a cross-request
+    state-reuse probe against one process proves nothing and a quiet fallback would let a hunt
+    record CLEAR for a class it never exercised. Catch it and record NEEDS_EXTERNAL_SIGNAL naming
+    the missing runtime (`state-integrity` § S2).
+    """
+
+
 class TargetProcess:
-    """Context manager that launches, healthchecks, and tears down a local target."""
+    """Context manager that launches, healthchecks, and tears down a local target.
+
+    `pool`/`policy` request a worker-POOL boot, needed by the cross-request state-reuse class
+    (`state-integrity` § S2): that bug only appears when two requests are served by the same
+    pooled worker, and its negative control needs them served by different ones.
+
+    `policy` must be passed deliberately, never inherited. On win32 Node's cluster default routes
+    *every* connection to *one* worker (measured: 12 sequential requests reached 1 of 4), so a
+    control built by merely raising the worker count reproduces the bug and proves nothing.
+    "rr" forces round-robin distribution; "none" leaves the OS/platform default in force.
+    """
 
     def __init__(self, target: str, port: int | None = None, entry: str | None = None,
-                 log_dir: Path | None = None):
+                 log_dir: Path | None = None, pool: int = 0, policy: str = ""):
         self.src = Path(target).resolve()
         self.port = port or free_port()
         self.entry = entry
@@ -52,6 +72,12 @@ class TargetProcess:
         self._log_fh = None
         self.base_url = f"http://127.0.0.1:{self.port}"
         self.kind = self._detect_kind()
+        self.pool = int(pool or 0)
+        if self.pool and policy not in ("rr", "none"):
+            raise ValueError("a pool boot needs policy='rr' (forced round-robin) or 'none' "
+                             "(platform default). It is not defaulted on purpose: an unstated "
+                             "distribution policy makes every observed rate meaningless.")
+        self.policy = policy
 
     def _detect_kind(self) -> str:
         if (self.src / "package.json").exists():
@@ -88,9 +114,61 @@ class TargetProcess:
             return [node, entry]
         return [npm, "start"]
 
+    def _prepare_pool(self) -> tuple:
+        """Return (cmd, extra_env) for a worker-pool boot, or raise PoolUnavailable.
+
+        Only the runtimes actually present here are supported, and the unsupported ones say so
+        rather than degrading to one process. See the `env` skill for the live inventory.
+        """
+        workers = str(self.pool)
+        if self.kind == "node":
+            # node's `cluster` is built in, so the only requirement is that the entry honours
+            # these env vars. The seeded fixture in work/_selftest does; a third-party app may
+            # not, in which case its own clustering flag is the way in.
+            return self._prepare_node(), {
+                "WORKERS": workers,
+                # read by a cluster-aware entry: "rr" => cluster.SCHED_RR
+                "CLUSTER_SCHED_POLICY": self.policy,
+            }
+        if self.kind == "python":
+            # Refused up front on win32, BEFORE looking for the executable, because the file
+            # existing proves nothing: gunicorn imports `fcntl`, which is POSIX-only, so an
+            # installed gunicorn.exe dies with ModuleNotFoundError the moment it is invoked
+            # (measured on this machine). Checked only for presence, this branch would hand back
+            # a command that cannot start, and `_await_health` would then raise "target exited
+            # early" - a boot crash, which reads as a broken fixture. PoolUnavailable is what
+            # routes the row to NEEDS_EXTERNAL_SIGNAL, so the honest answer must not depend on
+            # the executable happening to be absent.
+            if IS_WINDOWS:
+                raise PoolUnavailable(
+                    "no python worker pool on win32: gunicorn imports fcntl, which does not exist "
+                    "on Windows, so an installed gunicorn.exe still fails at import. `pip install "
+                    "gunicorn` does NOT unlock this lane here. Record the S2 row as "
+                    "NEEDS_EXTERNAL_SIGNAL naming the platform, or prove the class on a node "
+                    "target (`cluster` is built in and is the supported shape), or run the python "
+                    "target under WSL with gunicorn installed there.")
+            gunicorn = self.src / ".dynvenv" / "bin" / "gunicorn"
+            if not gunicorn.exists():
+                raise PoolUnavailable(
+                    "python worker pool needs gunicorn, which is not installed in the target's "
+                    f".dynvenv ({gunicorn}). Install it there, or record the S2 row as "
+                    "NEEDS_EXTERNAL_SIGNAL naming gunicorn.")
+            app = self.entry or "app:app"
+            return ([str(gunicorn), "-w", workers, "-b", f"127.0.0.1:{self.port}", app],
+                    {"GUNICORN_WORKERS": workers})
+        raise PoolUnavailable(
+            f"no worker-pool runtime for kind={self.kind!r}. PHP (php-fpm/mod_php), Java and Go "
+            "have no runtime on this machine and Docker is not installed, so a cross-request "
+            "state-reuse row on such a target is NEEDS_EXTERNAL_SIGNAL — never CLEAR. This is the "
+            "exact gap that stops CVE-2026-109619's shape being confirmable here.")
+
     def start(self) -> "TargetProcess":
-        cmd = self._prepare_python() if self.kind == "python" else self._prepare_node()
-        env = dict(os.environ, PORT=str(self.port))
+        pool_env: dict = {}
+        if self.pool:
+            cmd, pool_env = self._prepare_pool()
+        else:
+            cmd = self._prepare_python() if self.kind == "python" else self._prepare_node()
+        env = dict(os.environ, PORT=str(self.port), **pool_env)
         self._log_fh = open(self.log_path, "w", encoding="utf-8", errors="replace")
         kwargs = {}
         if IS_WINDOWS:

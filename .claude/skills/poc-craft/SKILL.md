@@ -98,3 +98,28 @@ hiding it.
 
 Live-website findings have no local process to record; the transcript is their anchor instead
 (`report-standards`), and the faithful-harness pattern is forbidden there.
+
+## A sanitizer trace is a first-class evidence type
+
+For a native (C/C++) finding there is no HTTP transcript and no bootable server, so the evidence
+anchor is the **sanitizer run recorded through `hunt poc-run`**. This needs no new machinery:
+`evidence/runlog.py` is generic process evidence — it records the command, the exit code,
+stdout/stderr with a sha256 of each, the PoC interpreter's `pip freeze`, and the target's git commit
+and dirty flag. `reports/gate.py` only adds the transcript checks for `kind` `url`/`grey`, so a `src`
+finding is gated on the runlog. `FIL-001`'s bundle already has this shape: `harness.cpp`,
+`build.sh`, `make_filamat.py`, `poc_fil001.sh`, `runlog.json`.
+
+The bundle must carry, and the report must quote:
+
+1. **The build command**, with the compiler and the sanitizer flags, so the reader can rebuild it —
+   and **which** sanitizer, because the choice is load-bearing (ASAN for lifetime bugs, MSAN for
+   uninitialised state; the wrong one reports nothing at all).
+2. **The sanitizer's own report text**, pasted, not paraphrased — and **symbolized**. A trace of bare
+   addresses is materially weaker evidence; MSVC emits symbols, WSL does not until `llvm-symbolizer`
+   is installed (`env`).
+3. **The negative control's clean run**, so the reader can see the benign input completing.
+4. Where the harness differs from the real caller — **the harness is the measurement boundary** and
+   the report says so.
+
+`runlog.py`'s `verify()` requires `MIN_RUNS = 2` and a clean tree, so run the PoC **twice from a
+clean checkout** before claiming it is recorded.

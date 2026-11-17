@@ -84,6 +84,15 @@ same class and shard — the existing "two hunters must never be given the same 
 A member whose trace ends in another member's sink hands the sink half over with the source half
 attached and says who it handed it to. One finding, two contributors, never two competing reports.
 
+**Group H is owned and must be sharded like any other.** `state-integrity-hunter` owns the seven
+state-integrity rows, and `hunt swarm plan` must not leave them unassigned — they are exactly the rows
+whose absence used to read as coverage. Shard them by *where the state lives*, not by subtree: one
+member on error paths (`catch`/`finally`/`recover`/bailout and the cleanup that trusts them), one on
+process-scoped holders (module globals, singletons, pools, thread-locals, async context). A member
+given the native half needs `native-sanitizer` and the right sanitizer per defect class — ASAN for
+lifetime bugs, MSAN for uninitialised state — and reports `BLOCKED (wrong instrumentation)` rather
+than `CLEAR` if only the wrong one was available.
+
 ## Forging an agent
 
 When the target has a surface no standing hunter owns, write one:

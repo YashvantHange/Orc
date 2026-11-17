@@ -57,8 +57,39 @@ hunt impact-gate <id> --program <google-oss-vrp|github|hackerone|huntr> --vector
 It refuses below CVSS 4.0, refuses a primitive with no demonstrated gadget chain, and refuses three or
 more independent preconditions — the three shapes that got real, fully-proven reports closed as not
 severe enough to track. `hunt report` and `hunt validate-report` both require its PASS, so run it
-before you write, not after. A BLOCK is not a setback: say so to the user, name the blocker, and offer
-the upstream GitHub issue as the ceiling.
+before you write, not after.
+
+## 0b. When the gate blocks — the draft is still your deliverable
+
+**A BLOCK is a verdict, not a dead end, and it has an output.** The asymmetry this section exists to
+remove: a PASS obliges you to write, audit and receipt a report with no question owed first, while a
+BLOCK used to oblige you only to *say* that an upstream issue would be the ceiling. So a real defect
+that failed the bar produced a blocker and nothing anyone could act on — the hunt's findings died in
+a sentence. Both branches now end in finished bytes; only the channel differs, and pressing submit is
+the user's call on both.
+
+So: if the defect is real and the gate blocked, write
+**`work/<slug>/upstream-issue-<short-name>.md`** without being asked, carrying:
+
+| Section | What it must hold |
+|---|---|
+| The refusal, first | *"This is not a disclosure report and must not be filed as one"* — in those words, with the gate's verdict id (`state/impact/<id>.json`) and its blocker quoted |
+| Confirmation status | `code-confirmed only` unless you built and ran it. Say plainly what was **not** done: no build, no sanitizer, consequence reasoned rather than observed |
+| The invariant | one sentence, the form *"X must always be true of Y"* |
+| The chain | every hop with a `file:line` you **opened** at the pinned commit, plus the commit itself |
+| Rebuttals tried | each way it could be fine, and why each fails, with the citation that kills it. A maintainer's first reply is a rebuttal; answer them in the issue |
+| Preconditions | the stacked conditions, quoting the gate's blocker as the reason this is an issue and not a report |
+| Suggested fix | the structural one, not just the line — *why* that location is the right boundary |
+| How to verify | the steps you did not run, including the right sanitizer and a negative control |
+| Provenance | how it was found, and whether any step came from prior knowledge of a published advisory rather than from the code |
+
+Two things not to do. Do not soften the preconditions to make it read better — the honest
+precondition list is why this is the right channel, and hiding it is how a maintainer's time gets
+wasted. And do not run the report auditors on it: they audit *reports* against the delivery gate,
+and a draft issue has no receipt to check. Audit it by re-opening every citation yourself.
+
+Worked example: `work/php-prepatch/upstream-issue-pcre-subpats-table.md`, written after
+`hunt impact-gate PHP-001` blocked on three stacked application preconditions.
 
 ## 1. Score CVSS
 `hunt cvss <vector>` (or `reports/cvss.py`). You pick the metrics from what you **proved** — anchors

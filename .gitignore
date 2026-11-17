@@ -26,6 +26,13 @@ work/_selftest/**/node_modules/
 work/_selftest/**/_dyn_logs/
 work/_selftest/**/__pycache__/
 work/_selftest/**/_TRAVERSAL_SENTINEL.txt
+# ... nor the sanitizer binaries the native fixtures build. They are reproducible from the
+# Makefile, and an .exe in a tracked tree is both noise and a thing nobody should run on trust.
+work/_selftest/**/*.exe
+work/_selftest/**/*.obj
+work/_selftest/**/*.pdb
+work/_selftest/**/*.ilk
+work/_selftest/**/*_san
 
 # --- cloned / vendored TARGET source -----------------------------------------
 # Targets are cloned, not committed. Keep the candidate list, drop the code.

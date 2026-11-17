@@ -2,6 +2,15 @@
 # Each is tagged with language so the scanner picks the right toolchain, and with the
 # attack surface that makes it interesting. repo_intel.py scores + ranks these.
 #
+# lang vocabulary: python · typescript · javascript · mixed  — these the static layer reads.
+#                  c · cpp · rust · go · java  — these it does NOT. semgrep's PACKS and CodeQL
+#                  cover only python/javascript/typescript, so a target tagged with one of the
+#                  latter scans to zero findings by construction. `hunt scan` prints an
+#                  UNSUPPORTED LANGUAGE banner and records static_coverage in profile.json; the
+#                  class verdicts come from a hand read plus, for the native state-integrity
+#                  classes, a sanitizer build (see the `native-sanitizer` skill). Tag it
+#                  honestly — a wrong tag buys a quiet scan, not coverage.
+#
 # Bias the pick toward: active maintenance, an inviting SECURITY.md / huntr scope, a real
 # server/untrusted-input surface, and an "audit gap" (surface >> prior advisories).
 

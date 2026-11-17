@@ -12,7 +12,46 @@ going through Bug Hunters routes the report nowhere.
 The submission form is a login-gated SPA. Claude cannot file it; the operator does. The pipeline's
 finish line is a paste-ready folder plus `submission-fields/`, one file per form field.
 
-## Eligibility — the rule that has cost the most
+## CLOSED TO PRODUCT VULNERABILITIES — 2026-10-01 (read this before anything else)
+
+The OSS VRP **no longer accepts product vulnerabilities**. Verbatim from the rules markdown in the
+public `google/bughunters` repo (`bughunters/articles/about/rules/open-source/
+google-open-source-software-vulnerability-reward-program-rules.md`, § Product vulnerabilities), read
+2026-10-20:
+
+> As of October 1, 2026, we are no longer accepting product vulnerabilities submitted to the OSS VRP.
+> For some Google Cloud repos impacting Google Cloud products we may still accept reports covering
+> product vulnerabilities through the Cloud VRP. We will continue to reformat and work on this aspect
+> of the OSS VRP and commit to giving an update in Q1 2027. In the meantime, we encourage you to find
+> impact across our other VRP programs and submit there instead, or pursue the Patch Rewards Program.
+> This change does not affect product vulnerabilities submitted before October 1, 2026.
+
+Confirmed in practice: `SHAKA-C19-001`, a default-config XSS in `shaka-project/shaka-player`
+(CWE-79, 6.1, runtime-confirmed in the project's own karma harness) was filed 2026-10-19 and closed
+**out of scope** on the date rule alone — triage agreed it *is* an OSS VRP product vulnerability and
+declined it anyway, pointing at the repo's security page, a public GitHub issue, or Patch Rewards.
+
+**What this means for lane selection.** Everything below about `C:`/`I:` impact, preconditions and
+tiers now decides nothing for a product defect in a Google OSS repo — the lane is closed before those
+questions are reached. **Do not open a VRP report lane for a product vulnerability in Google OSS.**
+A finding's ceiling is now the upstream repo: a private advisory on the project's security page, a
+public issue, or a merged patch. Only two things still route here:
+
+* **Supply chain** — source or build integrity (branch write, Actions/CI config, release
+  infrastructure, signing keys, package-manager credentials), and the PR-approval bypass requirement
+  in § Supply chain compromises still applies: a defect that needs a maintainer to approve a PR is
+  "Credit" at best.
+* **A different program** — Cloud VRP for Cloud-tied repos, AI VRP for AI-tied ones.
+
+**Patch Rewards is not a general fallback.** Its scope is the Tier 1 list in
+`patch-rewards-program/scope.md` (core parsers, web/mail servers, toolchains, decompression libs),
+plus any project that received a vulnerability report *from Google*, plus Tier 2 = projects
+integrated into OSS-Fuzz. Checked 2026-10-20: `shaka-player` is in none of them — not in `scope.md`,
+and `google/oss-fuzz/projects/shaka-player` is a 404. Where it does apply, the patch must be merged
+and un-reverted for a month *before* submitting, max 3 submissions/month, and one-liner fixes for
+non-exploitable crashes are excluded.
+
+## Eligibility — the rule that has cost the most (SUPERSEDED for product vulns; see above)
 
 The qualifying definition of a product vulnerability names **confidentiality and integrity of user
 data only**. Availability is absent from it, and the absence of an explicit exclusion bullet is not

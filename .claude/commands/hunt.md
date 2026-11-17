@@ -102,11 +102,20 @@ starts. Print the final board yourself when it returns. Give it this brief:
      `profile.json`. `url`/`grey`: scope cleared + baselines
      captured. If it cannot be booted, say so and treat every class as `BLOCKED (no runtime)` unless
      confirmed via the faithful-harness path in `dynamic-hunt` §3.
-  4. Route ranked leads (and code the scanners flagged nothing on) to the ten hunters —
+  3c. **The opening pass — `target-model`, before any class hunter is routed.** Write
+     `work/<slug>/model.md`: scopes and lifetimes (and which allocator/container belongs to which),
+     trust boundaries, every abnormal exit plus what its cleanup *trusts*, the invariants, default
+     reachability, state transitions — then sweep the invariant table **invariant-first**, behind the
+     relevance gate. `hunt model-check <target>` must pass before any class is accepted `CLEAR`; it
+     validates form only, never whether the model is right. It is **row 1** of the board and it is
+     what lets this pipeline reach a defect with no sink in it (`CVE-2026-109618`'s shape).
+     `hunt model-check --template` prints the skeleton.
+  4. Route ranked leads (and code the scanners flagged nothing on) to the eleven hunters —
      **authz-logic-hunter**, **rce-exec-hunter**, **server-side-hunter**, **datastore-hunter**,
      **xss-hunter**, **resource-dos-hunter**, **authn-crypto-hunter**, **client-side-hunter**,
-     **injection-hunter** (AI-native taint + unclaimed sinks), after **web-recon-hunter** on a live
-     target. **Prefer a sized swarm to fixed waves.** Load the `swarm` skill. `hunt swarm plan` computes the
+     **state-integrity-hunter** (group H: error-path state corruption + cross-request state reuse,
+     every language), **injection-hunter** (AI-native taint + unclaimed sinks), after
+     **web-recon-hunter** on a live target. **Prefer a sized swarm to fixed waves.** Load the `swarm` skill. `hunt swarm plan` computes the
 width from the target and the program's own limits (up to 30 at once) and refuses to leave any
 applicable matrix row unowned; `hunt board swarm` puts the whole membership on the board in one call.
 The old wave cap is now enforced in code rather than by a number in this brief — `concurrency` is
@@ -119,10 +128,13 @@ another nested orchestrator. That failure has happened three times.
 **Otherwise, run them in waves, not all at once** — parallel-spawning the whole roster has killed a
      hunt on provider rate limits; the wave order and the full routing map are in `sec-orchestrator`
      step 4. Cover **every applicable row of the coverage matrix** (`vuln-playbooks` § "Required
-     coverage — the matrix"): ~89 classes in seven groups — A access control & identity · B injection
+     coverage — the matrix"): ~97 classes in eight groups — A access control & identity · B injection
      & execution · C untrusted fetch & files · D client-side · E API & protocol · F infrastructure &
-     config · G AI/LLM-native. Each row is tagged with the kinds it applies to and its owner. Each
-     comes back `HIT` / `CLEAR` / `N/A` / `BLOCKED` with a reason **and the request that produced it**.
+     config · G AI/LLM-native · H state integrity. Each row is tagged with the kinds it applies to and
+     its owner. Each comes back with one of the **eight** verdicts in `dynamic/verdict.py` — `HIT` /
+     `CLEAR` / `N/A` / `BLOCKED` / `NOT_CONFIRMED` / `NEEDS_EXTERNAL_SIGNAL` / `LEAD` / `UNTESTED` —
+     with a reason **and the request that produced it**. "Sent it and nothing came back" is
+     `NOT_CONFIRMED`, never `CLEAR`.
      Web, protocol and client-side playbooks live in `web-playbooks`.
   5. Confirm at runtime. `src`: `hunt sweep work/<slug>/src --authz <authz.json> --fuzz <ep>:<param>`
      (boots ONCE: probe + authz-differential + fuzz). `url`: `hunt web probe --url <base> --scope <f>`,
@@ -134,6 +146,12 @@ another nested orchestrator. That failure has happened three times.
      report in the chosen layout (default `github`), clean-room verifies it, runs **report-auditor** +
      **report-editor**, then `hunt validate-report <id>` for the receipt. Resume hunting after.
   7. `hunt ledger add/update` to track state.
+
+**Do not report a confirmed finding back and wait.** Step 6 is not optional and it is not a question:
+once `hunt impact-gate` passes, the report is written, recorded, audited and taken to a receipt in the
+same session, and only then does the user hear about it — with the channel named and the submission
+still unsent. Submitting is theirs; everything up to it is yours. A chat message that says a bug was
+found and offers to write it up is an unfinished lane, and the gate will have no receipt to show.
 
 Report back: the hunt summary, the target kind, the scope attestation for a live target, the **coverage
 matrix table** (`HIT`/`CLEAR`/`N/A`/`BLOCKED` + reason, each depth-qualified — hops for `src`, the

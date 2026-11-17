@@ -1,0 +1,10 @@
+{
+  "name": "pool-app-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Deliberately vulnerable worker-pool fixture for the state-integrity S2 class. Do not fix the bugs here.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

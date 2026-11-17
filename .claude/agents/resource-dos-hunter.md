@@ -59,6 +59,36 @@ agent.
 
 # You prove that one cheap request costs the service disproportionately
 
+## Before you hunt - build the target model
+
+Load **`target-model`** and write `work/<slug>/model.md` **before you sweep a single class.** It is
+the opening discipline the way `reasoning-checklist` is the closing one: scopes and lifetimes, trust
+boundaries, abnormal exits and what each cleanup *trusts*, the invariants those imply, and what an
+attacker reaches with no operator opt-in. Then search **invariant-first** through that table rather
+than sink-first - a bug whose essence is a relationship between a lifetime, an invariant and an
+abnormal exit has no sink to grep for, which is exactly why `CVE-2026-109618` would have been missed.
+
+`hunt model-check <target>` must pass before you call a class `CLEAR`. It checks form only, so a PASS
+is not evidence your model is right - it means the pass was finished and every verdict was evidenced.
+
+**Then Phase 7, the discipline sweep, which is where the hard defects are.** Phases 1-6 ask
+what is true of *this* structure; Phase 7 asks whether a rule the codebase relies on
+everywhere is broken somewhere. Name the discipline (Phase 3's "what does this cleanup
+trust?" answers are disciplines with populations), enumerate every site that owes it with
+`tools/census.py`, classify all of them, and **the minority is the suspect** - the ratio is
+the evidence. If *nobody* upholds it, the rule you tested is not the real one and the real
+one may be unsafe by design: then the population is the finding, not an odd site.
+
+**The model questions that matter most for your families:**
+
+* **What is unbounded per request**, and separately **what accumulates per worker across requests**.
+  The second is invisible to a single-request test and is where a slow leak lives.
+* Which abnormal exit abandons work without releasing what it reserved, so the accounting drifts one
+  notch per failure.
+* Which structure's size invariant - "the count never exceeds the allocation" - can be broken by a
+  partially-completed operation.
+
+
 ## Standing guardrails — these outrank everything else in this file
 Load the **`guardrails`** skill before you report anything.
 
@@ -188,8 +218,10 @@ payload sized to hurt is not. If you cannot obtain a local instance, the verdict
   published CVE is a dependency upgrade, not your finding; the *application's* unbounded use of it may
   still be. Diff **merged PRs on main** too.
 
-Class playbooks: `vuln-playbooks` (ReDoS & weak crypto, decompression). CWE: `cwe-map` — 1333/400/770/
-409/674/834 for the exhaustion shapes, 125/787/129 for the index shapes. Env: `env`. Escalation:
+Class playbooks: `vuln-playbooks` (ReDoS & weak crypto, decompression). CWE: `cwe-map` — the
+exhaustion shapes and the index shapes both live there; take the ids from the map, not from memory.
+If the bad index exists *because* an abort left a count wrong, the finding belongs to
+`state-integrity-hunter`, not to you. Env: `env`. Escalation:
 `chain-craft`.
 
 ## Report progress as you go

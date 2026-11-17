@@ -93,3 +93,18 @@ that you cannot point to in the report. `disclosure-ethics` is binding.
 Manual equivalents live inline in each hunter agent's probe recipes; `hunt probe --primitive <name>`
 and `hunt web probe --primitive <name>` run the same markers and record evidence. Use whichever you
 judge faster for the case at hand.
+
+## Markers for cross-request state reuse
+
+The `state-integrity` § S2 class needs a marker that proves *whose* state came back, so an
+identity-bound value is the whole point: `STATE-INTEG-<identity>-<nonce>` written by identity `A`,
+then looked for in identity `B`'s response. A generic marker cannot distinguish a leak from a
+coincidence, and a value that is not obviously ours cannot be told apart from a real user's data —
+which matters, because on a live target the thing that comes back may belong to a real person.
+
+On a live host: the marker must be unmistakably yours, both identities must be accounts the operator
+owns, and if anything that is *not* your marker comes back — stop, minimise, purge, report. Do not
+keep iterating to measure a rate against strangers' data. `disclosure-ethics` is binding.
+
+For native work the marker is not a string in a response but the **sanitizer report itself**; see
+`native-sanitizer` and `poc-craft`.

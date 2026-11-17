@@ -25,11 +25,13 @@ the start of the hunt, then mutate one row at a time:
 
 ```
 hunt board init <target> --kind src --step 1/9 \
+     --row "target-model:scopes, exits, invariants (the opening pass)" \
      --row "web-recon-hunter:surface inventory" \
      --row "target-aimer:aim the probes at this target" \
      --row "rce-exec-hunter:B code execution" \
      --row "server-side-hunter:C fetch, files & protocol" \
      --row "authz-logic-hunter:A access control" \
+     --row "state-integrity-hunter:H error-path & cross-request state" \
      --row "dynamic-prover:runtime confirmation loop" \
      --row "chain-analyzer:compose findings into attack paths" ...
 
@@ -37,13 +39,34 @@ hunt board start  <target> 2 --result "tracing 6 ranked leads"
 hunt board set    <target> 2 --result "7/11 classes · 1 HIT (SSTI /render)" --show
 hunt board done   <target> 2 --result "1 HIT · 9 CLEAR · 1 BLOCKED"
 hunt board block  <target> 5 --result "no browser — install playwright to unblock"
-hunt board tally  <target> --step 5/9 --covered 23/47 --hit 3 --clear 18 --blocked 2
+hunt board tally  <target> --step 5/9 --covered 23/47 --hit 3 --clear 18 --blocked 2 \
+                  --not-confirmed 4 --needs-signal 1 --untested 6
 hunt board lane   <target> <id> --layout github     # appends writer/auditor/editor/gate rows
 hunt board show   <target>                          # reprint — this is what you paste
 ```
 
 Every mutating call reprints the full board, so the reprint at a boundary is free: the call that
 records the state *is* the call that prints it. Row numbers are assigned at `init` and never reused;
+**Every verdict has a counter, on purpose.** `--not-confirmed`, `--needs-signal` and `--untested`
+exist because a verdict with nowhere to be counted gets tallied as CLEAR or BLOCKED instead — the
+absorption the `vuln-playbooks` legend forbids. They render only when non-zero, so a hunt without them
+looks exactly as before, but a hunt that has them cannot hide them. `UNTESTED` is the honest count of
+rows that have an owner and have not run: **owned is not tested.**
+
+**Row 1 is the opening pass, and it is always row 1.** `target-model` runs before any class hunter,
+so it opens at `[ ]` on the very first board the user sees and stays visible until it is closed —
+the same mechanism that keeps the group-H manual rows from going quietly missing. Close it with the
+validator's own numbers, not an impression:
+
+```
+hunt board done <target> 1 --result "model.md: 26 structures, 14 exits, 142 cells, 96% coverage"
+```
+
+A board whose row 1 is still `[ ]` at the end of a hunt is a hunt that only swept sinks. Say that in
+the verdict rather than letting the class list imply otherwise. `hunt model-check <target>` is what
+decides whether the row may be closed, and it checks form only — it cannot tell you the model is
+*right*, so never close the row on a PASS alone if you know the model is thin.
+
 `add` and `lane` append. The tally is forward-only — a call that would lower `covered`/HIT/CLEAR/
 BLOCKED is refused rather than silently accepted, because a tally that can go down is a tally that
 was guessed at. Elapsed clocks per row come from the state, not from your sense of how long it felt.

@@ -1,0 +1,92 @@
+{
+  "_comment": "THE GRADING KEY for the model_corpus exam. Held outside work/_selftest/ on purpose: a hunter reads its target, and if it can read this it is not a blind test. Never copy this into the fixture tree, never cite it in a model.md, never paste it into a hunter's brief.",
+  "_authored": "before the first run, from the fixture sources - not from any agent's output",
+  "_how_to_use": [
+    "Score a run by comparing its model.md invariant table against `reference_invariants` below.",
+    "invariant recall      = reference invariants the model named / total reference invariants",
+    "exit coverage         = abnormal exits named / `expected_exits`",
+    "consumer coverage     = rows naming the right later consumer / rows with verdict yes",
+    "evidence correctness  = cited file:line that actually says what the row claims / cited rows",
+    "AN UNMATCHED MODEL INVARIANT IS ADJUDICATED, NOT SCORED WRONG. A row the reference lacks may be a real invariant the reference missed - conceivably a second defect. Write the adjudication: 'real, missed by the reference' (then fix the reference), 'real but not security-relevant', or 'not an invariant'. Only the third counts against the run.",
+    "Do not tune the method against this file and then report a pass. If the method needs the answer to find the answer, it measured nothing."
+  ],
+  "expected_exits": [
+    "longjmp from arena_alloc (allocation failure / OOM)",
+    "early return when the table is full",
+    "process exit at end of main"
+  ],
+  "reference_invariants": [
+    {
+      "id": "REF-01",
+      "applies_to": [
+        "a_vulnerable.c",
+        "b_patched.c",
+        "c_suspicious.c",
+        "d_rolledback.c"
+      ],
+      "structure": "table_t (the slot array and its counter)",
+      "invariant": "nNumUsed counts only slots whose key has been initialised",
+      "mutated_by": "table_insert",
+      "interrupted_by": "longjmp out of arena_strdup",
+      "later_consumer": "table_destroy's for-loop over nNumUsed",
+      "verdict_per_fixture": {
+        "a_vulnerable.c": "yes",
+        "b_patched.c": "no - the counter commits after the slot is whole (t->nNumUsed = i + 1)",
+        "c_suspicious.c": "no - no fallible call between the increment and the whole slot (inline char key[KEYMAX])",
+        "d_rolledback.c": "no - the bailout handler restores it (t->nNumUsed = t->committed)"
+      },
+      "note": "This is the CVE-2026-109618 invariant. A model that states it in these terms has understood the defect; one that says 'the table could be corrupted' has not."
+    },
+    {
+      "id": "REF-02",
+      "applies_to": [
+        "e_crossscope.c"
+      ],
+      "structure": "module_globals.last_upload_name",
+      "invariant": "no process-lifetime pointer may reference arena memory after arena_reset",
+      "mutated_by": "handle_request",
+      "interrupted_by": "longjmp out of arena_strdup; also the normal end of request",
+      "later_consumer": "the next request's read of MG(last_upload_name)",
+      "verdict_per_fixture": {
+        "e_crossscope.c": "no - rshutdown nulls the field before arena_reset"
+      },
+      "note": "This is the CVE-2026-109619 invariant. Answering it requires opening rshutdown, which is a different function from the store."
+    },
+    {
+      "id": "REF-03",
+      "applies_to": [
+        "e_crossscope.c"
+      ],
+      "structure": "module_globals.request_count",
+      "invariant": "none - this counter is process-scoped by design",
+      "verdict_per_fixture": {
+        "e_crossscope.c": "no"
+      },
+      "is_decoy": true,
+      "note": "A model that treats this as a cross-scope leak has confused 'a global written during a request' with 'a global holding request-scoped data'. Counting it as a finding is a false positive and should be scored as one."
+    }
+  ],
+  "false_positive_controls": {
+    "b_patched.c": "reporting it means the method keys on the function, not the defect",
+    "c_suspicious.c": "reporting it means the method keys on the SHAPE and never checked the window",
+    "d_rolledback.c": "reporting it means the method never asked who repairs the interruption",
+    "e_crossscope.c": "reporting it means the method never opened the shutdown path"
+  },
+  "headline_result": "Found REF-01 as `yes` on a_vulnerable.c with the right consumer, AND silent on all four controls. Both halves are required; either alone is not a pass.",
+  "target": "work/_selftest/model_corpus",
+  "answer_locations": [
+    "a_vulnerable.c",
+    "b_patched.c",
+    "c_suspicious.c",
+    "d_rolledback.c",
+    "e_crossscope.c",
+    "table_insert",
+    "table_destroy",
+    "table_rollback",
+    "arena_strdup",
+    "arena_alloc",
+    "last_upload_name",
+    "module_globals",
+    "oom_after"
+  ]
+}

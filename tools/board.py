@@ -134,7 +134,12 @@ def _add_rows(doc: dict, specs: list[str]) -> list[dict]:
 # ------------------------------------------------------------------------ commands ---
 def cmd_init(a) -> int:
     doc = {"target": a.target, "kind": a.kind, "step": _parse_step(a.step or "1/9"),
-           "tally": {"covered": [0, 0], "HIT": 0, "CLEAR": 0, "BLOCKED": 0, "CONFIRMED": []},
+           # The counters mirror dynamic/verdict.py's State enum. NOT_CONFIRMED and
+           # NEEDS_EXTERNAL_SIGNAL have their own buckets on purpose: a row with nowhere to be
+           # counted gets tallied as CLEAR or BLOCKED instead, which is the absorption the
+           # vuln-playbooks legend forbids.
+           "tally": {"covered": [0, 0], "HIT": 0, "CLEAR": 0, "BLOCKED": 0,
+                     "NOT_CONFIRMED": 0, "NEEDS_SIGNAL": 0, "UNTESTED": 0, "CONFIRMED": []},
            "started": time.time(), "updated": time.time(), "rows": []}
     if not a.row:
         raise SystemExit("init needs the WHOLE roster up front (--row agent:scope, repeatable) — "
@@ -220,10 +225,14 @@ def cmd_tally(a) -> int:
         if new[0] < t["covered"][0]:
             raise SystemExit(f"coverage only moves forward: {t['covered'][0]} -> {new[0]} refused")
         t["covered"] = new
-    for key, val in (("HIT", a.hit), ("CLEAR", a.clear), ("BLOCKED", a.blocked)):
+    for key, val in (("HIT", a.hit), ("CLEAR", a.clear), ("BLOCKED", a.blocked),
+                     ("NOT_CONFIRMED", getattr(a, "not_confirmed", None)),
+                     ("NEEDS_SIGNAL", getattr(a, "needs_signal", None)),
+                     ("UNTESTED", getattr(a, "untested", None))):
         if val is not None:
-            if val < t[key]:
-                raise SystemExit(f"{key} only moves forward: {t[key]} -> {val} refused")
+            # .get: a board opened before these counters existed has no such key.
+            if val < t.get(key, 0):
+                raise SystemExit(f"{key} only moves forward: {t.get(key, 0)} -> {val} refused")
             t[key] = val
     if a.confirmed:
         for fid in a.confirmed:
@@ -284,6 +293,12 @@ def _header(doc: dict) -> str:
             f"step {doc['step'][0]}/{doc['step'][1]}",
             f"covered {t['covered'][0]}/{t['covered'][1]}",
             f"{t['HIT']} HIT", f"{t['CLEAR']} CLEAR", f"{t['BLOCKED']} BLOCKED"]
+    # Shown only when non-zero, so a hunt with none of them reads exactly as before — but a hunt
+    # that has them can never hide them in the CLEAR count.
+    for key, label in (("NOT_CONFIRMED", "NOT-CONFIRMED"), ("NEEDS_SIGNAL", "NEEDS-SIGNAL"),
+                       ("UNTESTED", "UNTESTED")):
+        if t.get(key):
+            bits.append(f"{t[key]} {label}")
     swarms = doc.get("swarms") or ([doc["swarm"]] if doc.get("swarm") else [])
     if len(swarms) > 1:
         bits.append(f"fleet {len(swarms)}x{sum(int(e.get('size') or 0) for e in swarms)}")

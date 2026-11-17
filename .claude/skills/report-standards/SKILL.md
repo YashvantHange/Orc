@@ -463,14 +463,23 @@ the set you declared, so a mismatch blocks.
 pastes whole: Affected products (**Ecosystem · Package name · Affected versions · Patched versions** —
 every row filled, no exceptions; a blank row is what leaves an advisory unreviewed) · Severity (vector
 + score) · Weakness (CWE) · Title · Summary · Details (code **quoted**, root-cause chain) · Proof of
-Concept (observed / expected / negative control) · Impact · Suggested fix · Not tested · Duplicate
-check · Credit. Live/grey add `### Transcript`. No scaffold comment survives inside the paste region.
+Concept (observed / expected / negative control) · Impact · Suggested fix · Not tested · Credit.
+Live/grey add `### Transcript`. No scaffold comment survives inside the paste region.
 
 **`hackerone`** — platform fields (asset, weakness, severity, program, scope authorization, test
 window, tested-from) · Summary · **Steps To Reproduce** · Impact · Supporting Material / References ·
-Testing conduct / safe harbour · Not tested / scope-blocked · Duplicate check · Credit. The weight
+Testing conduct / safe harbour · Not tested / scope-blocked · Credit. The weight
 sits in Steps To Reproduce: H1 triage reproduces from that text alone, so a placeholder or skipped
 prerequisite there is a blocking defect, not a nit.
+
+**No Duplicate check section, in either layout.** Never write a Duplicate check / dedup / prior-art /
+related-advisories section into delivered text. Instructed 2026-08-25 after UFO-002 shipped with one:
+it reads as arguing scope with the triager before they have assessed the bug, and it volunteers a map
+of adjacent advisories that invites the duplicate close it is trying to prevent. The novelty gate is
+unchanged — `variant-analysis` still runs and a variant is still OUT_OF_SCOPE and unreportable — but
+the verdict lives in `state/dup/<ID>.json` and the ledger, never in the paste. If an auditor asks for
+the section to be removed, it is **right**; do not override it from this file. See
+`memory/reports-no-duplicate-check-section.md`, which outranks this skill.
 
 If both destinations are in play, write `github` first and re-cut it — the facts are identical, so the
 second is a formatting pass, not a second investigation.

@@ -6,7 +6,7 @@ fuzz.py — property/mutation fuzzing to trigger UNKNOWN crashes (novel-bug disc
 
 
 
-Two modes:
+One mode:
 
   * HTTP endpoint fuzzing (default): hammer a parameter with a corpus of edge-case inputs
 
@@ -14,11 +14,16 @@ Two modes:
 
     reflected markers — i.e. unhandled conditions a human wouldn't hand-write.
 
-  * Callable fuzzing (--module M --func F): property-fuzz an importable parser/loader.
+  (There is no callable/module fuzzing path. This docstring advertised `--module M --func F` for a
+  long time while main()'s argparse defined no such arguments, so the feature never existed — a
+  docstring promising a capability the code lacks is exactly the "reads as coverage" defect the
+  pipeline hunts. To property-fuzz an importable parser directly, write the ten-line loop by hand.)
 
 
 
-Coverage-guided fuzzers (Atheris / jazzer.js) are Linux-only -> use them under WSL for
+This layer does NOT do coverage-guided fuzzing: Atheris / jazzer.js are Linux-only and neither is
+installed here. For native crash work use the `native-sanitizer` skill (WSL clang 21 has
+-fsanitize=fuzzer,address; MSVC has ASAN), not this module. Historic note, kept because it misled:
 
 deep parser fuzzing; this cross-platform layer is the default.
 

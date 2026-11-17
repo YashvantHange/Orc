@@ -200,6 +200,23 @@ fix, and only the user can add it.**
 - **Never claim a version is affected without evidence.** Runtime-tested and source-read are
   different claims; label which one you have.
 - **The report file is the paste.** No internal ids, agent names, gate references, or local paths.
+- **Coverage must be explicit, owned, and evidence-backed.** A class is never covered because a
+  capable tool is installed, because another hunter mentions it in passing, because a scanner ran, or
+  because a scan finished without errors. Coverage needs a named class, a designated owner, a
+  detection strategy, a stated confirmation bar, and a verdict with evidence behind it. A class with
+  no owner is not `CLEAR` — it is **invisible**, and the matrix prints complete. Use the full
+  vocabulary `dynamic/verdict.py` enforces: "I sent it and nothing came back" is `NOT_CONFIRMED`,
+  "I lack the channel" is `NEEDS_EXTERNAL_SIGNAL`, "owned but not run" is `UNTESTED`. Only `CLEAR`
+  and `N/A` close a row, and `CLEAR` needs the guard named *and* the attack rejected.
+- **A tool that cannot see the bug is not evidence that there is none.** The instrument has to match
+  the defect: ASAN is silent on an in-bounds read of uninitialised memory that MSAN reports, and a
+  scanner that does not parse the language returns zero findings on any input. Wrong instrument →
+  `BLOCKED (wrong instrumentation)`; no instrument → `BLOCKED`, naming it. Never `CLEAR`.
+- **A passing gate is not a checkpoint.** `impact-gate PASS` means write the report now — same
+  session, through both audits, to a `hunt validate-report` receipt. The user's decision is
+  *publication*, never whether the write-up happens. Reporting a confirmed finding in chat and
+  offering to draft it is an unfinished lane; a BLOCKED gate is a verdict to state and keep working
+  from, not a question to wait on. Full rule in `.claude/skills/guardrails/SKILL.md`.
 
 ## Where things live
 
