@@ -177,8 +177,28 @@ The lane, run to completion before any hunter is re-tasked:
 2. **Security-impact gate**, then the **novelty gate** (`variant-analysis`) + `hunt dup`, in that
    order — the cheapest rejection runs first. A non-vulnerability, a variant, or an incomplete-fix
    stops here as `OUT_OF_SCOPE`; none of them enters the lane.
-3. **Pick the layout.** Default **github** (private GHSA draft on the repo, or the huntr on-platform
-   form — same body). **hackerone** only when the destination is an H1 program. See `report-standards`
+3. **Pick the destination, then the layout.**
+
+   **HARD RULE — the OSS VRP is a strict no-go, and avoiding it is not enough.** Google OSS VRP has
+   accepted only *supply-chain* reports since 2026-10-01. Worse, **the program chosen on the
+   bughunters.google.com form does not bind**: a product defect shipped from a public GitHub repo
+   under a Google org is auto-assessed into the OSS VRP and closed whatever was selected. AGSDK-003
+   proved that at 7.8 High with both audits PASS, a gate receipt and a seven-leg PoC — closed
+   `Infeasible` in one step, component reassigned, no human ever reading the finding
+   (`issuetracker.google.com/issues/587318060`). Five shaka-player reports died there before it.
+
+   So, for a Google target:
+   * **In a public GitHub repo → the repo's GHSA is the FIRST destination, not the fallback.** Confirm
+     with `gh api repos/<owner>/<repo>/private-vulnerability-reporting`, then file with
+     `gh api --method POST repos/<owner>/<repo>/security-advisories/reports --input payload.json`.
+     No browser, no sign-in. `cvss_vector_string` + `cwe_ids` + `vulnerabilities[]` are parsed for you.
+   * **Not in a public repo, or Google VRP / Cloud VRP impact is demonstrable → the VRP form** is
+     worth using, and only then.
+   * `hunt impact-gate --program …` refuses anything matching `oss vrp` outright (check 3d) and warns
+     on other Google programs about the auto-routing. Do not argue with it; re-aim the destination.
+
+   Then the layout: default **github** (private GHSA draft on the repo, or the huntr on-platform form
+   — same body). **hackerone** only when the destination is an H1 program. See `report-standards`
    § Layouts.
 4. **report-writer** writes it — the whole report, in one drafting pass, from the evidence bundle. The
    scaffold is a section checklist, not the report. Target ~900 words: a longer report is not a more

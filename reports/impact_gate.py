@@ -262,6 +262,40 @@ def evaluate(ans: dict) -> tuple[str, list, list]:
             "bughunters.google.com/learn/invalid-reports/invalid-attack-scenarios/"
             "attacks-working-only-when-sharing-local-account-with-the-attacker")
 
+    # 3d. The OSS VRP is a STRICT no-go for a product defect, and so is reaching it by accident.
+    #
+    #     Google OSS VRP stopped accepting product vulnerabilities on 2026-10-01; it now takes only
+    #     supply-chain reports. AGSDK-003 proved the second half of this the expensive way: a 7.8
+    #     High with both audits PASS, a gate receipt and a seven-leg PoC was filed through
+    #     bughunters.google.com having deliberately selected a DIFFERENT program, and was
+    #     "automatically assessed to be an OSS VRP product vulnerability report" and closed
+    #     Infeasible in one step (issuetracker.google.com/issues/587318060, component 310426 ->
+    #     310543). No human ever assessed the defect.
+    #
+    #     So the program chosen on the form does not bind. For anything shipped from a public GitHub
+    #     repo under a Google org, a product defect routes to the OSS VRP and dies there whatever is
+    #     selected — which makes the repo's own GitHub Security Advisories the FIRST destination, not
+    #     the fallback. Google's own closure text says exactly that.
+    OSS_VRP = re.compile(r"\boss[\s_-]?vrp\b", re.I)
+    if OSS_VRP.search(program):
+        blockers.append(
+            "the OSS VRP is a strict no-go for a product defect: it has accepted only supply-chain "
+            "reports since 2026-10-01. AGSDK-003 was closed Infeasible there in one step without "
+            "any human assessment of the finding, after being auto-routed from a different program "
+            "the form had been told to use. File on the repository's own GitHub Security Advisories "
+            "instead — `gh api repos/<owner>/<repo>/private-vulnerability-reporting` says in one "
+            "call whether it is enabled, and `gh api --method POST "
+            "repos/<owner>/<repo>/security-advisories/reports --input payload.json` files it with "
+            "no browser. Re-run this gate with that destination as --program")
+    elif is_google:
+        notes.append(
+            "GOOGLE PROGRAM, PRODUCT DEFECT: the program selected on the bughunters form does NOT "
+            "bind. If the affected code ships from a public GitHub repo under a Google org, this "
+            "will be auto-assessed into the OSS VRP and closed Infeasible whatever is selected — "
+            "that is what happened to AGSDK-003 at 7.8 High with a clean receipt. Check the repo "
+            "for private vulnerability reporting and file the GHSA FIRST; treat the VRP form as the "
+            "fallback, not the primary route")
+
     # 4/5. The two classes already closed Infeasible by name. See the 2026-09-04 mistake-log entry.
     if ans.get("dev_tool"):
         blockers.append(

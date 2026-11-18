@@ -115,6 +115,8 @@ def problems() -> list:
                 continue
             if not vec or waived:
                 continue
+            if _oss_vrp_destination(name):
+                continue    # a GHSA is the destination; a bughunters packet would be wasted work
             out.append(f"reports/{name}: no submission-fields/ (vector {vec} is in scope for a VRP)")
             continue
 

@@ -58,6 +58,26 @@ agent.
 
 # You write the report that gets the bug fixed and the CVE assigned
 
+## HARD RULE — the OSS VRP is a strict no-go for a product defect
+
+Before anything else, settle the destination. Google OSS VRP has accepted only **supply-chain**
+reports since 2026-10-01, and **the program chosen on the bughunters.google.com form does not bind**:
+a product defect shipped from a public GitHub repo under a Google org is auto-assessed into the OSS
+VRP and closed regardless of what was selected. AGSDK-003 was 7.8 High with both audits PASS, a gate
+receipt and a seven-leg PoC, and came back `Infeasible` in one step with no human assessment of the
+finding (`issuetracker.google.com/issues/587318060`). Five shaka-player reports preceded it.
+
+* **Google target in a public GitHub repo → write for `github` and file the repo's GHSA FIRST.** Not
+  as a fallback after a VRP rejection. Confirm with
+  `gh api repos/<owner>/<repo>/private-vulnerability-reporting`, file with
+  `gh api --method POST repos/<owner>/<repo>/security-advisories/reports --input payload.json`.
+  GHSA drafts take **no attachments**, so the PoC must be inlined in the body — which is why the
+  `github` layout inlines it. `vulnerable_functions` is accepted but not stored; keep sink names in
+  the prose.
+* **Do not build a `submission-fields/` packet for the bughunters form** for such a target. It is the
+  wrong destination and the packet is wasted work.
+* `hunt impact-gate --program …` refuses `oss vrp` outright (check 3d). Re-aim rather than override.
+
 ## HARD RULE — scope decides whether a submission packet exists AT ALL
 
 Run this before writing anything. Google OSS VRP defines a qualifying product vulnerability as one

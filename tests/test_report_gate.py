@@ -391,6 +391,32 @@ def test_impact_bar_blocks_the_two_dead_classes():
     assert _impact_pass(dev_tool=True) == "BLOCK"
 
 
+def test_oss_vrp_is_a_strict_no_go_for_a_product_defect():
+    """Google OSS VRP has accepted only supply-chain reports since 2026-10-01. Five shaka reports
+    and AGSDK-003 died there; AGSDK-003 was auto-routed into it from a different program the form
+    had been told to use, and closed Infeasible without any human assessment."""
+    _clean()
+    assert _impact_pass(program="google-oss-vrp") == "BLOCK"
+    blockers = " ".join(impact_gate.load(FID)["blockers"])
+    assert "strict no-go" in blockers
+    assert "security-advisories/reports" in blockers      # names the route that works
+    # the spelling varies in the records; the rule must catch them all
+    for spelling in ("OSS VRP", "oss_vrp", "Google OSS VRP (shaka-player, TIER_OT1)"):
+        _clean()
+        assert _impact_pass(program=spelling) == "BLOCK", spelling
+
+
+def test_other_google_programs_warn_about_oss_vrp_auto_routing():
+    """The program chosen on the bughunters form does not bind. A product defect shipped from a
+    public Google GitHub repo is auto-assessed into the OSS VRP whatever is selected, so the note
+    has to fire on a program that is otherwise fine."""
+    _clean()
+    assert _impact_pass(program="google-vrp") == "PASS"
+    notes = " ".join(impact_gate.load(FID)["notes"])
+    assert "does NOT" in notes and "auto-assessed into the OSS VRP" in notes
+    assert "GHSA" in notes
+
+
 def test_shared_local_account_attacker_blocks_on_a_google_program():
     """Google publishes "attacks working only when sharing a local account with the attacker" as an
     INVALID ATTACK SCENARIO. JUL-001 passed this gate with its attacker recorded verbatim as "Any

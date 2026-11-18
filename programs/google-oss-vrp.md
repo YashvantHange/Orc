@@ -2,15 +2,41 @@
 
 Destination program dossier. Resolve this **before** tasking the first hunter, not at report time.
 
-## Intake
+## Intake — CORRECTED 2026-11-18, the old advice here was wrong
 
-`https://g.co/vulnz` (Google Bug Hunters). A repository's own `SECURITY.md` usually says so
-explicitly; shaka-project's does. GitHub security advisories on these repos are used by maintainers
-for post-triage coordination and are **not** the intake channel — filing a GHSA draft instead of
-going through Bug Hunters routes the report nowhere.
+This file previously said GHSA drafts "are **not** the intake channel" and that filing one "routes
+the report nowhere". **That is false for a product defect, and following it costs the report.**
+What actually happens:
 
-The submission form is a login-gated SPA. Claude cannot file it; the operator does. The pipeline's
-finish line is a paste-ready folder plus `submission-fields/`, one file per form field.
+* **Bug Hunters closes it.** AGSDK-003 was filed at `g.co/vulnz` with a *different* program
+  deliberately selected, was auto-assessed into the OSS VRP anyway, and closed `Infeasible` in one
+  step — component reassigned 310426 → 310543, no human assessment of the finding
+  (`issuetracker.google.com/issues/587318060`). The closure text itself says: *"Please review the
+  relevant security.md file and look for other reporting channels. If you cannot find one feel free
+  to report a vulnerability on the repo security page or open a public GitHub issue."*
+* **The GHSA lands.** The same finding was then filed on the repo and sat in `triage` with the
+  maintainers as a private advisory, with the severity derived as 7.8 high from the vector
+  alone. The advisory id is deliberately kept out of version control while it is in triage -
+  naming it here would announce an undisclosed advisory for that package. It is recorded in
+  the memory note for the finding instead.
+
+So for a product defect in a public Google repo, **the repo's GHSA is the intake, and the Bug
+Hunters form is the dead end** — the reverse of what this section used to claim. Claude *can* file a
+GHSA with no browser and no sign-in:
+
+```
+gh api repos/<owner>/<repo>/private-vulnerability-reporting          # enabled?
+gh api --method POST repos/<owner>/<repo>/security-advisories/reports --input payload.json
+```
+
+`payload.json`: `summary`, `description` (Markdown), `cvss_vector_string`, `cwe_ids[]`,
+`vulnerabilities[]` with `package{ecosystem,name}` / `vulnerable_version_range` /
+`patched_versions`. **No attachments** — inline the PoC. `vulnerable_functions` is accepted but not
+stored.
+
+The Bug Hunters form remains the intake only for a target that is **not** in a public repo, or where
+Google VRP / Cloud VRP impact is demonstrable. It is a login-gated SPA that Claude cannot file, so
+there the finish line is still a paste-ready folder plus `submission-fields/`, one file per field.
 
 ## CLOSED TO PRODUCT VULNERABILITIES — 2026-10-01 (read this before anything else)
 

@@ -51,7 +51,7 @@ Then run question 5, the **impact bar** — is this worth *filing*, which is a d
 whether it is a vulnerability. Record the answers; nothing downstream will open without them:
 
 ```
-hunt impact-gate <id> --program <google-oss-vrp|github|hackerone|huntr> --vector '<CVSS:3.1/...>'   --attacker '...' --boundary '...' --impact '...' --marginal-gain '...' --gadget '...'   --precondition '...' --precondition '...'
+hunt impact-gate <id> --program <github|google-vrp|hackerone|huntr> --vector '<CVSS:3.1/...>'   --attacker '...' --boundary '...' --impact '...' --marginal-gain '...' --gadget '...'   --precondition '...' --precondition '...'
 ```
 
 It refuses below CVSS 4.0, refuses a primitive with no demonstrated gadget chain, and refuses three or
@@ -95,10 +95,34 @@ Worked example: `work/php-prepatch/upstream-issue-pcre-subpats-table.md`, writte
 `hunt cvss <vector>` (or `reports/cvss.py`). You pick the metrics from what you **proved** — anchors
 and metric guidance in `report-standards`. Record the **vector string**, not just the number.
 
-## 2. Pick the layout, then write the report
+## 2. Pick the destination, then the layout, then write the report
 
-**`github` is the default** — a private GHSA draft on the repo (the huntr on-platform form takes the
-same body). Use `hackerone` only when the destination is an H1 program. Full section sets:
+**HARD RULE — never `oss vrp`, and avoiding it by hand is not enough.** Google OSS VRP has accepted
+only *supply-chain* reports since 2026-10-01, and the program selected on the
+bughunters.google.com form **does not bind**: a product defect shipped from a public GitHub repo
+under a Google org is auto-assessed into the OSS VRP and closed whatever was chosen. AGSDK-003 —
+7.8 High, both audits PASS, gate receipt, seven-leg PoC — came back `Infeasible` in one step with no
+human assessment (`issuetracker.google.com/issues/587318060`); five shaka-player reports went the
+same way. `hunt impact-gate` now refuses any `--program` matching `oss vrp` (check 3d).
+
+So for a Google target **in a public GitHub repo, the repo's GHSA is the first destination**, not a
+fallback after rejection:
+
+```
+gh api repos/<owner>/<repo>/private-vulnerability-reporting          # is it enabled?
+gh api --method POST repos/<owner>/<repo>/security-advisories/reports --input payload.json
+```
+
+`payload.json` takes `summary`, `description` (Markdown), `cvss_vector_string`, `cwe_ids[]` and
+`vulnerabilities[]` (`package{ecosystem,name}`, `vulnerable_version_range`, `patched_versions`);
+GitHub derives the severity itself. **GHSA drafts accept no attachments**, so the PoC must be inlined
+in the body. `vulnerable_functions` is accepted but not stored — keep sink names in the prose.
+
+Use the bughunters form only when the target is **not** in a public repo, or when Google VRP / Cloud
+VRP impact is actually demonstrable.
+
+**`github` is the default layout** — a private GHSA draft on the repo (the huntr on-platform form
+takes the same body). Use `hackerone` only when the destination is an H1 program. Full section sets:
 `report-standards` § Layouts.
 
 ```
